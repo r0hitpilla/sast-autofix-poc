@@ -1,4 +1,4 @@
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from models import Finding
 from fixer import apply_diff, branch_name, build_fix_prompt, fix_finding
@@ -57,6 +57,14 @@ def test_apply_diff_returns_false_on_git_error():
     repo.git.apply.side_effect = Exception("patch does not apply")
     ok = apply_diff(repo, SAMPLE_DIFF)
     assert ok is False
+
+
+def test_apply_diff_returns_false_when_tempfile_creation_fails():
+    repo = MagicMock()
+    with patch("fixer.tempfile.mkstemp", side_effect=OSError("disk full")):
+        ok = apply_diff(repo, SAMPLE_DIFF)
+    assert ok is False
+    repo.git.apply.assert_not_called()
 
 
 def test_fix_finding_extracts_diff_and_applies_it():

@@ -40,8 +40,9 @@ def extract_diff(model_output: str) -> str:
 
 
 def apply_diff(repo, diff_text: str) -> bool:
-    fd, path = tempfile.mkstemp(suffix=".diff")
+    path = None
     try:
+        fd, path = tempfile.mkstemp(suffix=".diff")
         with os.fdopen(fd, "w") as f:
             f.write(diff_text)
         repo.git.apply("--whitespace=fix", path)
@@ -49,7 +50,8 @@ def apply_diff(repo, diff_text: str) -> bool:
     except Exception:
         return False
     finally:
-        os.remove(path)
+        if path is not None:
+            os.remove(path)
 
 
 def fix_finding(finding: Finding, ollama, repo, retry_feedback: str | None = None) -> FixResult:
