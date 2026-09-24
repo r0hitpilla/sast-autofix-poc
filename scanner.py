@@ -1,0 +1,44 @@
+import json
+import subprocess
+
+from models import Finding
+
+
+def parse_semgrep_json(raw_json: str) -> list[Finding]:
+    data = json.loads(raw_json)
+    findings = []
+    for result in data.get("results", []):
+        extra = result.get("extra", {})
+        metadata = extra.get("metadata", {})
+        cwe_list = metadata.get("cwe", [])
+        cwe = cwe_list[0] if cwe_list else "unknown"
+
+        findings.append(Finding(
+            file=result["path"],
+            line=result["start"]["line"],
+            rule_id=result["check_id"],
+            cwe=cwe,
+            message=extra.get("message", ""),
+            snippet=extra.get("lines", ""),
+        ))
+    return findings
+
+
+def run_semgrep(target_repo: str, rulesets: list[str]) -> str:
+    cmd = ["semgrep", "--json", "--quiet"]
+    for ruleset in rulesets:
+        cmd += ["--config", ruleset]
+    cmd.append(target_repo)
+
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode not in (0, 1):
+        # semgrep exits 1 when findings exist; anything else is a real failure
+        raise RuntimeError(
+            f"semgrep failed (exit {result.returncode}): {result.stderr}"
+        )
+    return result.stdout
+
+
+def scan(target_repo: str, rulesets: list[str]) -> list[Finding]:
+    raw = run_semgrep(target_repo, rulesets)
+    return parse_semgrep_json(raw)

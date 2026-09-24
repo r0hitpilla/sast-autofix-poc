@@ -1,0 +1,15 @@
+{
+  "results": [
+    {
+      "check_id": "python.flask.security.injection.sql-injection-using-db-cursor-execute",
+      "path": "sample_vuln_app/app.py",
+      "start": {"line": 41, "col": 5},
+      "end": {"line": 45, "col": 30},
+      "extra": {
+        "message": "Detected string-interpolated SQL query.",
+        "metadata": {"cwe": ["CWE-89: SQL Injection"]},
+        "lines": "def search_users():\n    username = request.args.get(\"username\", \"\")\n    conn = get_db()\n    query = f\"SELECT id, username, role FROM users WHERE username = '{username}'\"\n    rows = conn.execute(query).fetchall()"
+      }
+    }
+  ]
+}
