@@ -27,6 +27,13 @@ def run_test_suite(target_repo: str) -> tuple[bool, str]:
     return result.returncode == 0, result.stdout + result.stderr
 
 
+def _check(target_repo: str, semgrep_rulesets: list[str], finding: Finding):
+    rescanned = scan(target_repo, semgrep_rulesets)
+    still_present = finding_still_present(finding, rescanned)
+    tests_passed, test_output = run_test_suite(target_repo)
+    return still_present, tests_passed, test_output
+
+
 def validate_and_retry(
     fix_result: FixResult,
     ollama,
@@ -37,12 +44,40 @@ def validate_and_retry(
 ) -> ValidationResult:
     finding = fix_result.finding
     current_fix = fix_result
-    last_output = ""
 
+    # Validate the fix that was already applied before this call, before
+    # spending any retries on it.
+    still_present, tests_passed, test_output = _check(target_repo, semgrep_rulesets, finding)
+    last_output = test_output
+    if not still_present and tests_passed:
+        return ValidationResult(
+            finding=finding,
+            clean=True,
+            test_output=test_output,
+            validated=True,
+        )
+
+    applied_note = ""
     for attempt in range(max_retries):
-        rescanned = scan(target_repo, semgrep_rulesets)
-        still_present = finding_still_present(finding, rescanned)
-        tests_passed, test_output = run_test_suite(target_repo)
+        feedback = (
+            f"Rescan still found the issue: {still_present}. "
+            f"Tests passed: {tests_passed}. Output: {test_output[:2000]}"
+            f"{applied_note}"
+        )
+        current_fix = fix_finding(finding, ollama, repo, retry_feedback=feedback)
+
+        if not current_fix.applied:
+            applied_note = (
+                " NOTE: the previous retry's diff failed to apply to the "
+                "repo at all — produce a diff that applies cleanly."
+            )
+        else:
+            applied_note = ""
+
+        # Every retry attempt gets validated, including the last one — a
+        # fix that lands on the final retry must not be reverted just
+        # because retries ran out before it could be checked.
+        still_present, tests_passed, test_output = _check(target_repo, semgrep_rulesets, finding)
         last_output = test_output
 
         if not still_present and tests_passed:
@@ -52,12 +87,6 @@ def validate_and_retry(
                 test_output=test_output,
                 validated=True,
             )
-
-        feedback = (
-            f"Rescan still found the issue: {still_present}. "
-            f"Tests passed: {tests_passed}. Output: {test_output[:2000]}"
-        )
-        current_fix = fix_finding(finding, ollama, repo, retry_feedback=feedback)
 
     repo.git.checkout("main")
     return ValidationResult(

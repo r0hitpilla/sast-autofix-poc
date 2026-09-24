@@ -79,3 +79,29 @@ def test_validate_and_retry_retries_then_reverts_when_still_failing():
     assert result.validated is False
     assert mock_fix_finding.call_count == 2  # max_retries
     repo.git.checkout.assert_called_with("main")  # reverted off the branch
+
+
+def test_validate_and_retry_succeeds_on_last_retry_without_reverting():
+    # Regression test: the fix that lands on the final allowed retry must
+    # still be rescanned/tested before deciding to revert. scan() is called
+    # once before the loop (validating the already-applied fix_result) and
+    # once after each retry; here only the very last call comes back clean.
+    finding = make_finding()
+    fix_result = FixResult(finding=finding, diff="some diff", applied=True, branch="autofix/x")
+    ollama = MagicMock()
+    repo = MagicMock()
+
+    with patch("validator.scan", side_effect=[[finding], [finding], []]), \
+         patch("validator.run_test_suite", return_value=(True, "no tests found")), \
+         patch("validator.fix_finding") as mock_fix_finding:
+        mock_fix_finding.return_value = fix_result
+
+        result = validate_and_retry(
+            fix_result, ollama, repo, target_repo=".",
+            semgrep_rulesets=["p/security-audit"], max_retries=2,
+        )
+
+    assert result.validated is True
+    assert result.clean is True
+    assert mock_fix_finding.call_count == 2  # both retries attempted
+    repo.git.checkout.assert_not_called()  # last retry succeeded, no revert
