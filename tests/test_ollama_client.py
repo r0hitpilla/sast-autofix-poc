@@ -1,10 +1,4 @@
-import sys
 from unittest.mock import MagicMock, patch
-
-# Fallback: create fake ollama module if not installed
-if 'ollama' not in sys.modules:
-    fake_ollama = MagicMock()
-    sys.modules['ollama'] = fake_ollama
 
 from ollama_client import OllamaClient
 

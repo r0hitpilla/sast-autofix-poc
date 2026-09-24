@@ -1,10 +1,4 @@
-import sys
 from unittest.mock import MagicMock, patch
-
-# Fallback: create fake laya module if not installed
-if 'laya' not in sys.modules:
-    fake_laya = MagicMock()
-    sys.modules['laya'] = fake_laya
 
 from laya_client import LayaClient
 
