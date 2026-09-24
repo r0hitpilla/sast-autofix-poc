@@ -40,11 +40,22 @@ def commit_validated_findings(repo, entries, strategy: str) -> list[str]:
         repo.git.commit("-m", "fix: automated security fixes from sast-autofix-poc")
         branches = [branch] * len(validated_entries)
     else:  # per-finding
+        seen = {}
         for triage, _ in validated_entries:
-            branch = f"autofix/{triage.finding.rule_id.replace('.', '-')}-L{triage.finding.line}"
+            finding = triage.finding
+            file_slug = finding.file.rsplit("/", 1)[-1].replace(".", "-")
+            base = f"autofix/{finding.rule_id.replace('.', '-')}-{file_slug}-L{finding.line}"
+            # Same rule_id+file+line can recur (re-triaged finding, or two
+            # closely related findings at the same line) — disambiguate
+            # deterministically with an occurrence-index suffix so branch
+            # names never collide within a batch.
+            count = seen.get(base, 0)
+            seen[base] = count + 1
+            branch = base if count == 0 else f"{base}-{count}"
+
             repo.git.checkout("-b", branch)
-            repo.git.add(triage.finding.file)
-            repo.git.commit("-m", f"fix: {triage.finding.cwe} at {triage.finding.file}:{triage.finding.line}")
+            repo.git.add(finding.file)
+            repo.git.commit("-m", f"fix: {finding.cwe} at {finding.file}:{finding.line}")
             branches.append(branch)
 
     return branches

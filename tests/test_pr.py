@@ -66,6 +66,20 @@ def test_commit_validated_findings_per_finding_strategy_uses_multiple_branches()
     branches = commit_validated_findings(repo, entries, strategy="per-finding")
 
     assert len(branches) == 2
+    assert len(set(branches)) == 2
+
+
+def test_commit_validated_findings_per_finding_strategy_disambiguates_same_rule_and_line():
+    # Two validated findings sharing the same rule_id + file + line (e.g. a
+    # re-triaged finding, or two closely related findings at the same
+    # source line) must still produce distinct branch names.
+    repo = MagicMock()
+    entries = [make_entry(), make_entry()]
+
+    branches = commit_validated_findings(repo, entries, strategy="per-finding")
+
+    assert len(branches) == 2
+    assert len(set(branches)) == 2
 
 
 def test_open_pr_dry_run_returns_none_and_does_not_call_github():
