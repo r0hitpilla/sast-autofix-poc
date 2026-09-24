@@ -88,6 +88,14 @@ def validate_and_retry(
                 validated=True,
             )
 
+    # The rejected fix's edits are still sitting uncommitted in the working
+    # tree (fix branches never commit — see fixer.fix_finding). Discard just
+    # this finding's file before leaving the branch, so a later validated
+    # finding in the SAME file can never pick up these unvalidated edits
+    # when pr.commit_validated_findings does `git add <file>`. Scoped to
+    # this one file (not `reset --hard`) so any other finding's already-
+    # validated-but-not-yet-committed edits elsewhere in the tree survive.
+    repo.git.checkout("--", finding.file)
     repo.git.checkout("main")
     return ValidationResult(
         finding=finding,

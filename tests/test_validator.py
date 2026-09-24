@@ -105,3 +105,34 @@ def test_validate_and_retry_succeeds_on_last_retry_without_reverting():
     assert result.clean is True
     assert mock_fix_finding.call_count == 2  # both retries attempted
     repo.git.checkout.assert_not_called()  # last retry succeeded, no revert
+
+
+def test_validate_and_retry_restores_dirty_file_before_reverting():
+    # A rejected fix attempt leaves its edits sitting uncommitted in the
+    # working tree (fix branches never commit). On final failure, those
+    # edits must be discarded for this finding's file specifically — not
+    # just left dirty — so a later validated finding in the same file can
+    # never pick them up via `git add <file>` in pr.commit_validated_findings.
+    finding = make_finding()
+    fix_result = FixResult(finding=finding, diff="some diff", applied=True, branch="autofix/x")
+    ollama = MagicMock()
+    ollama.generate.return_value = "```diff\nstill broken\n```"
+    repo = MagicMock()
+
+    with patch("validator.scan", return_value=[finding]), \
+         patch("validator.run_test_suite", return_value=(True, "no tests found")), \
+         patch("validator.fix_finding") as mock_fix_finding:
+        mock_fix_finding.return_value = fix_result
+
+        result = validate_and_retry(
+            fix_result, ollama, repo, target_repo=".",
+            semgrep_rulesets=["p/security-audit"], max_retries=2,
+        )
+
+    assert result.validated is False
+    # The dirty file is restored to HEAD's version before leaving the branch...
+    repo.git.checkout.assert_any_call("--", finding.file)
+    # ...and that restore happens strictly before switching back to main, so
+    # the file is already clean by the time HEAD moves.
+    checkout_calls = [c.args for c in repo.git.checkout.call_args_list]
+    assert checkout_calls.index(("--", finding.file)) < checkout_calls.index(("main",))

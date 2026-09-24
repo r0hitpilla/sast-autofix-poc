@@ -1,4 +1,16 @@
+from git.exc import GitCommandError
+
 from models import TriageResult, ValidationResult
+
+
+def _checkout_branch(repo, branch: str) -> None:
+    # Idempotent: a branch of this name may already exist (e.g. left behind
+    # by a prior --dry-run, or a retry within the same run) — reuse it
+    # instead of failing with "branch already exists".
+    try:
+        repo.git.checkout("-b", branch)
+    except GitCommandError:
+        repo.git.checkout(branch)
 
 
 def build_pr_body(entries: list[tuple[TriageResult, ValidationResult]]) -> str:
@@ -34,7 +46,7 @@ def commit_validated_findings(repo, entries, strategy: str) -> list[str]:
 
     if strategy == "single":
         branch = "autofix/all-validated-findings"
-        repo.git.checkout("-b", branch)
+        _checkout_branch(repo, branch)
         for triage, _ in validated_entries:
             repo.git.add(triage.finding.file)
         repo.git.commit("-m", "fix: automated security fixes from sast-autofix-poc")
@@ -53,7 +65,7 @@ def commit_validated_findings(repo, entries, strategy: str) -> list[str]:
             seen[base] = count + 1
             branch = base if count == 0 else f"{base}-{count}"
 
-            repo.git.checkout("-b", branch)
+            _checkout_branch(repo, branch)
             repo.git.add(finding.file)
             repo.git.commit("-m", f"fix: {finding.cwe} at {finding.file}:{finding.line}")
             branches.append(branch)

@@ -77,21 +77,27 @@ def run_pipeline(target_repo: str, config_path: str, dry_run: bool):
 
     branches = commit_validated_findings(repo, entries, cfg.pr_strategy)
     body = build_pr_body(entries)
+    # "single" strategy returns the same branch repeated once per validated
+    # finding; "per-finding" returns N distinct branches. Dedupe (preserving
+    # order) so every distinct branch gets pushed and gets its own PR —
+    # branches[0] alone would silently drop findings 2..N under per-finding.
+    unique_branches = list(dict.fromkeys(branches))
 
     if dry_run:
-        print("[dry-run] Would push branch(es):", set(branches))
+        print("[dry-run] Would push branch(es):", unique_branches)
         print("[dry-run] PR body:\n", body)
         return
 
-    repo.git.push("--set-upstream", "origin", branches[0])
     github_client = Github(os.environ["GITHUB_TOKEN"])
     repo_full_name = os.environ.get("GITHUB_REPO", "r0hitpilla/sast-poc-vuln-app")
-    url = open_pr(
-        github_client, repo_full_name, branches[0],
-        title="Automated security fixes (sast-autofix-poc)",
-        body=body, dry_run=False,
-    )
-    print(f"Opened PR: {url}")
+    for branch in unique_branches:
+        repo.git.push("--set-upstream", "origin", branch)
+        url = open_pr(
+            github_client, repo_full_name, branch,
+            title="Automated security fixes (sast-autofix-poc)",
+            body=body, dry_run=dry_run,
+        )
+        print(f"Opened PR: {url}")
 
 
 def cmd_fix(args):
