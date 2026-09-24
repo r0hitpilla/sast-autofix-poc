@@ -1,3 +1,5 @@
+import sys
+
 from models import Finding, TriageResult
 
 TRIAGE_QUESTION = "is this a true positive security vulnerability"
@@ -38,6 +40,10 @@ def triage_finding(
     try:
         reasoning = ollama.generate(build_reasoning_prompt(finding))
     except Exception as exc:
+        print(
+            f"[triage error: ollama call failed for {finding.file}:{finding.line}: {exc}]",
+            file=sys.stderr,
+        )
         return TriageResult(
             finding=finding,
             llm_reasoning=f"[triage error: ollama call failed: {exc}]",
@@ -55,9 +61,20 @@ def triage_finding(
     try:
         score = laya.true_positive_score(state, TRIAGE_QUESTION)
     except Exception as exc:
+        # Annotate rather than silently returning 0.0 with untouched
+        # reasoning: a reader (and the PR body) must be able to tell a Laya
+        # failure apart from a genuine calibrated score of 0.0.
+        print(
+            f"[triage error: laya call failed for {finding.file}:{finding.line}: {exc}]",
+            file=sys.stderr,
+        )
         return TriageResult(
             finding=finding,
-            llm_reasoning=reasoning,
+            llm_reasoning=(
+                f"{reasoning}\n\n[triage error: laya call failed: {exc} — "
+                "laya_score=0.0 is a placeholder, not a calibrated score; "
+                "routed to review]"
+            ),
             laya_score=0.0,
             route="review",
         )

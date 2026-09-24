@@ -1,5 +1,7 @@
 from unittest.mock import MagicMock, patch
 
+from git.exc import GitCommandError
+
 from models import Finding
 from fixer import apply_diff, branch_name, build_fix_prompt, fix_finding
 
@@ -13,7 +15,7 @@ SAMPLE_DIFF = """--- a/app.py
 
 def make_finding():
     return Finding(
-        file="sample_vuln_app/app.py",
+        file="app.py",
         line=41,
         rule_id="python.flask.security.injection.sql-injection",
         cwe="CWE-89",
@@ -92,3 +94,70 @@ def test_fix_finding_marks_not_applied_when_no_diff_found():
 
     assert result.applied is False
     assert result.diff == ""
+
+
+def test_fix_finding_survives_ollama_failure_instead_of_crashing():
+    # Spec: an Ollama call failure is logged and the finding is skipped —
+    # it must never take the whole pipeline down mid-run.
+    finding = make_finding()
+    ollama = MagicMock()
+    ollama.generate.side_effect = ConnectionError("ollama unreachable")
+    repo = MagicMock()
+
+    result = fix_finding(finding, ollama, repo)
+
+    assert result.applied is False
+    assert result.diff == ""
+    assert result.branch == branch_name(finding)
+    repo.git.checkout.assert_not_called()
+
+
+def test_fix_finding_reuses_existing_branch_instead_of_crashing():
+    # branch_name is a pure function of the finding, so a retry (or a second
+    # pipeline run over a repo with leftover branches) asks for a branch that
+    # already exists. `checkout -b` raises there; the pipeline must not.
+    finding = make_finding()
+    ollama = MagicMock()
+    ollama.generate.return_value = f"```diff\n{SAMPLE_DIFF}```"
+    repo = MagicMock()
+    repo.git.checkout.side_effect = [
+        GitCommandError("git checkout -b", 128),  # branch already exists
+        None,                                     # plain checkout succeeds
+    ]
+
+    result = fix_finding(finding, ollama, repo)
+
+    assert result.applied is True
+    checkout_calls = [c.args for c in repo.git.checkout.call_args_list]
+    assert checkout_calls == [("-b", result.branch), (result.branch,)]
+
+
+def test_fix_finding_discards_previous_attempt_before_applying_a_retry():
+    # The rejected retry-N edits are still uncommitted in the working tree,
+    # but retry N+1's diff is generated against the ORIGINAL snippet — it
+    # only applies if the file is restored to HEAD first.
+    finding = make_finding()
+    ollama = MagicMock()
+    ollama.generate.return_value = f"```diff\n{SAMPLE_DIFF}```"
+    repo = MagicMock()
+
+    with patch("fixer.apply_diff", return_value=True) as mock_apply:
+        fix_finding(finding, ollama, repo, retry_feedback="previous attempt failed")
+
+    checkout_calls = [c.args for c in repo.git.checkout.call_args_list]
+    assert ("--", finding.file) in checkout_calls
+    # ...and the restore happens before the patch is applied.
+    assert repo.git.checkout.call_args_list[-1].args == ("--", finding.file)
+    mock_apply.assert_called_once()
+
+
+def test_fix_finding_does_not_discard_on_the_first_attempt():
+    finding = make_finding()
+    ollama = MagicMock()
+    ollama.generate.return_value = f"```diff\n{SAMPLE_DIFF}```"
+    repo = MagicMock()
+
+    fix_finding(finding, ollama, repo)
+
+    checkout_calls = [c.args for c in repo.git.checkout.call_args_list]
+    assert ("--", finding.file) not in checkout_calls

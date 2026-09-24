@@ -6,7 +6,7 @@ from triage import build_reasoning_prompt, route, triage_finding
 
 def make_finding():
     return Finding(
-        file="sample_vuln_app/app.py",
+        file="app.py",
         line=41,
         rule_id="python.flask.security.injection.sql-injection",
         cwe="CWE-89",
@@ -81,4 +81,10 @@ def test_triage_finding_routes_to_review_on_laya_failure():
     result = triage_finding(finding, ollama, laya, threshold_fix=0.8, threshold_review=0.4)
 
     assert result.route == "review"
-    assert result.llm_reasoning == "reasoning text"
+    assert result.laya_score == 0.0
+    # The Ollama reasoning survives...
+    assert "reasoning text" in result.llm_reasoning
+    # ...and the Laya failure is recorded, so laya_score=0.0 can't be mistaken
+    # for a genuine calibrated "definitely a false positive" score.
+    assert "laya" in result.llm_reasoning.lower()
+    assert "laya model error" in result.llm_reasoning

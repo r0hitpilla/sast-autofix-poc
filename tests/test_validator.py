@@ -1,13 +1,18 @@
 from unittest.mock import MagicMock, patch
 
 from models import Finding, FixResult
-from validator import finding_still_present, run_test_suite, validate_and_retry
+from validator import (
+    count_same_rule_and_file,
+    finding_still_present,
+    run_test_suite,
+    validate_and_retry,
+)
 
 
-def make_finding():
+def make_finding(line=41):
     return Finding(
-        file="sample_vuln_app/app.py",
-        line=41,
+        file="app.py",
+        line=line,
         rule_id="python.flask.security.injection.sql-injection",
         cwe="CWE-89",
         message="Detected string-interpolated SQL query.",
@@ -26,6 +31,35 @@ def test_finding_still_present_false_when_gone():
     assert finding_still_present(original, []) is False
 
 
+def test_count_same_rule_and_file_ignores_line_numbers():
+    original = make_finding(line=41)
+    rescanned = [make_finding(line=42), make_finding(line=44)]
+    assert count_same_rule_and_file(original, rescanned) == 2
+
+
+def test_finding_still_present_counts_a_decrease_as_progress():
+    # sample_vuln_app has the same SQLi rule firing on two adjacent lines.
+    # Fixing one of them leaves the other behind; a presence-only check would
+    # call that "still failing" forever, burn every retry, and revert a
+    # genuinely correct fix. A drop in the count is progress.
+    original = make_finding(line=42)
+    rescanned = [make_finding(line=44)]
+
+    assert finding_still_present(original, rescanned, baseline_count=2) is False
+
+
+def test_finding_still_present_true_when_count_did_not_drop():
+    original = make_finding(line=42)
+    rescanned = [make_finding(line=42), make_finding(line=44)]
+
+    assert finding_still_present(original, rescanned, baseline_count=2) is True
+
+
+def test_finding_still_present_without_baseline_uses_presence():
+    original = make_finding()
+    assert finding_still_present(original, [make_finding()]) is True
+
+
 def test_run_test_suite_no_tests_dir(tmp_path):
     passed, output = run_test_suite(str(tmp_path))
     assert passed is True
@@ -39,6 +73,22 @@ def test_run_test_suite_runs_pytest_when_tests_dir_exists(tmp_path):
 
     passed, output = run_test_suite(str(tmp_path))
     assert passed is True
+
+
+def test_run_test_suite_does_not_double_prefix_a_relative_target_repo(tmp_path, monkeypatch):
+    # cwd is already target_repo, so the pytest argument must be relative.
+    # With a RELATIVE target_repo, a target_repo-prefixed argument resolves
+    # to target_repo/target_repo/tests and pytest exits non-zero — which the
+    # pipeline would read as "the target repo's tests failed".
+    target = tmp_path / "target"
+    tests_dir = target / "tests"
+    tests_dir.mkdir(parents=True)
+    (tests_dir / "test_dummy.py").write_text("def test_ok():\n    assert True\n")
+    monkeypatch.chdir(tmp_path)
+
+    passed, output = run_test_suite("target")
+
+    assert passed is True, output
 
 
 def test_validate_and_retry_marks_validated_when_rescan_clean():
@@ -57,6 +107,31 @@ def test_validate_and_retry_marks_validated_when_rescan_clean():
     assert result.validated is True
     assert result.clean is True
     repo.git.checkout.assert_not_called()  # no revert needed
+
+
+def test_validate_and_retry_validates_when_a_repeated_rule_count_drops():
+    # Regression test for repeated same-rule findings in one file. The rescan
+    # still reports the rule for this file (the OTHER instance), but one
+    # fewer than before the fix — that is a successful fix, not a failure.
+    finding = make_finding(line=42)
+    other_instance = make_finding(line=44)
+    fix_result = FixResult(finding=finding, diff="some diff", applied=True, branch="autofix/x")
+    ollama = MagicMock()
+    repo = MagicMock()
+
+    with patch("validator.scan", return_value=[other_instance]), \
+         patch("validator.run_test_suite", return_value=(True, "no tests found")), \
+         patch("validator.fix_finding") as mock_fix_finding:
+        result = validate_and_retry(
+            fix_result, ollama, repo, target_repo=".",
+            semgrep_rulesets=["p/security-audit"], max_retries=2,
+            baseline_count=2,
+        )
+
+    assert result.validated is True
+    assert result.clean is True
+    mock_fix_finding.assert_not_called()  # no retries burned
+    repo.git.checkout.assert_not_called()  # nothing reverted
 
 
 def test_validate_and_retry_retries_then_reverts_when_still_failing():

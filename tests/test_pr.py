@@ -6,7 +6,7 @@ from pr import build_pr_body, commit_validated_findings, open_pr
 
 def make_entry(validated=True):
     finding = Finding(
-        file="sample_vuln_app/app.py",
+        file="app.py",
         line=41,
         rule_id="python.flask.security.injection.sql-injection",
         cwe="CWE-89",

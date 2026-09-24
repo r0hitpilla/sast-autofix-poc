@@ -14,7 +14,7 @@ from ollama_client import OllamaClient
 from pr import build_pr_body, commit_validated_findings, open_pr
 from scanner import scan
 from triage import triage_finding
-from validator import validate_and_retry
+from validator import count_same_rule_and_file, validate_and_retry
 
 
 def cmd_scan(args):
@@ -52,23 +52,81 @@ def run_pipeline(target_repo: str, config_path: str, dry_run: bool):
     laya = LayaClient(model=cfg.laya_model)
     repo = git.Repo(target_repo)
 
+    # Every finding ends up in exactly one of these buckets — a human reading
+    # the run output must be able to account for all of them, not just the
+    # ones that made it into the PR.
+    outcomes = {
+        "fixed and validated": 0,
+        "sent to review": 0,
+        "rejected (likely false positive)": 0,
+        "skipped (file not found in target repo)": 0,
+        "fix generation failed": 0,
+        "fix did not apply": 0,
+        "fix applied but failed validation": 0,
+    }
+
+    # How many instances of each (rule_id, file) the target repo is still
+    # expected to hold. Seeded from the original scan and decremented as
+    # fixes validate, so each finding's validation compares the rescan
+    # against the count that was really there just before ITS fix — not a
+    # stale whole-run baseline that would auto-pass later same-rule findings.
+    remaining = {
+        (f.rule_id, f.file): count_same_rule_and_file(f, findings)
+        for f in findings
+    }
+
     entries = []
     for finding in findings:
         triage_result = triage_finding(
             finding, ollama, laya, cfg.threshold_fix, cfg.threshold_review
         )
+        if triage_result.route == "review":
+            outcomes["sent to review"] += 1
+            continue
         if triage_result.route != "fix":
+            outcomes["rejected (likely false positive)"] += 1
+            continue
+
+        # Finding.file is repo-root-relative (scanner runs Semgrep with
+        # cwd=target_repo), so it must resolve under target_repo. If it
+        # doesn't, every downstream repo.git.* call would silently target a
+        # nonexistent path — fail loudly and diagnosably here instead.
+        resolved = os.path.join(target_repo, finding.file)
+        if not os.path.exists(resolved):
+            print(
+                f"[skip] {finding.rule_id} at {finding.file}:{finding.line} — "
+                f"expected the file at {resolved!r} but it does not exist; "
+                "Finding.file is not in the target repo's frame.",
+                file=sys.stderr,
+            )
+            outcomes["skipped (file not found in target repo)"] += 1
             continue
 
         fix_result = fix_finding(finding, ollama, repo)
+        if not fix_result.diff:
+            outcomes["fix generation failed"] += 1
+            continue
         if not fix_result.applied:
+            outcomes["fix did not apply"] += 1
             continue
 
+        rule_file_key = (finding.rule_id, finding.file)
         validation_result = validate_and_retry(
             fix_result, ollama, repo, target_repo,
             cfg.semgrep_rulesets, cfg.max_fix_retries,
+            baseline_count=remaining[rule_file_key],
         )
         entries.append((triage_result, validation_result))
+        if validation_result.validated:
+            remaining[rule_file_key] -= 1
+            outcomes["fixed and validated"] += 1
+        else:
+            outcomes["fix applied but failed validation"] += 1
+
+    print(f"\nScanned: {len(findings)} findings.")
+    for label, count in outcomes.items():
+        if count:
+            print(f"  {label.capitalize()}: {count}")
 
     validated = [(t, v) for t, v in entries if v.validated]
     if not validated:

@@ -28,6 +28,17 @@ Set your GitHub token (repo scope) before running `pr` or `run` for real:
 
 Drop `--dry-run` once you're ready to actually push and open the PR.
 
+## Trust model / prompt-injection surface
+
+This tool feeds source code from the scanned repository straight into a local
+LLM and auto-applies the diff that comes back, with no scope validation on
+which files that diff touches. A comment or string in the scanned repo can
+therefore attempt to steer the model into emitting a patch that changes
+unrelated code. Only point it at repositories whose contents you already
+trust, treat every LLM-generated diff as unreviewed until a human has read
+the resulting pull request, and never merge one of its PRs without human
+review.
+
 ## Config
 
 All model names, thresholds, rulesets, and PR strategy live in

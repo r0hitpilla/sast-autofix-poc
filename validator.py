@@ -6,20 +6,46 @@ from models import Finding, FixResult, ValidationResult
 from scanner import scan
 
 
-def finding_still_present(original: Finding, rescanned: list[Finding]) -> bool:
-    return any(
-        f.rule_id == original.rule_id and f.file == original.file
-        for f in rescanned
+def count_same_rule_and_file(finding: Finding, findings: list[Finding]) -> int:
+    return sum(
+        1 for f in findings
+        if f.rule_id == finding.rule_id and f.file == finding.file
     )
 
 
+def finding_still_present(
+    original: Finding,
+    rescanned: list[Finding],
+    baseline_count: int | None = None,
+) -> bool:
+    """Has the fix made no progress on `original`?
+
+    Exact-line matching is unusable here — a patch shifts the line numbers of
+    everything after it — so matching is on (rule_id, file). But a file can
+    legitimately hold several instances of the same rule (sample_vuln_app has
+    SQLi on two adjacent lines); matching on mere presence would then report
+    "still present" forever after a correct fix of one instance, burning every
+    retry and reverting good work.
+
+    So when the pre-fix `baseline_count` of (rule_id, file) matches is known,
+    compare counts: any decrease is progress. Without a baseline (callers that
+    only care about presence), fall back to the simple presence check.
+    """
+    current = count_same_rule_and_file(original, rescanned)
+    if baseline_count is None:
+        return current > 0
+    return current >= baseline_count
+
+
 def run_test_suite(target_repo: str) -> tuple[bool, str]:
-    tests_dir = os.path.join(target_repo, "tests")
-    if not os.path.isdir(tests_dir):
+    if not os.path.isdir(os.path.join(target_repo, "tests")):
         return True, "no tests found"
 
     result = subprocess.run(
-        ["pytest", tests_dir, "-v"],
+        # "tests", not os.path.join(target_repo, "tests") — cwd is already
+        # target_repo, so a prefixed path would resolve to
+        # target_repo/target_repo/tests.
+        ["pytest", "tests", "-v"],
         capture_output=True,
         text=True,
         cwd=target_repo,
@@ -27,9 +53,14 @@ def run_test_suite(target_repo: str) -> tuple[bool, str]:
     return result.returncode == 0, result.stdout + result.stderr
 
 
-def _check(target_repo: str, semgrep_rulesets: list[str], finding: Finding):
+def _check(
+    target_repo: str,
+    semgrep_rulesets: list[str],
+    finding: Finding,
+    baseline_count: int | None = None,
+):
     rescanned = scan(target_repo, semgrep_rulesets)
-    still_present = finding_still_present(finding, rescanned)
+    still_present = finding_still_present(finding, rescanned, baseline_count)
     tests_passed, test_output = run_test_suite(target_repo)
     return still_present, tests_passed, test_output
 
@@ -41,13 +72,24 @@ def validate_and_retry(
     target_repo: str,
     semgrep_rulesets: list[str],
     max_retries: int,
+    baseline_count: int | None = None,
 ) -> ValidationResult:
+    """Validate an already-applied fix, retrying up to `max_retries` times.
+
+    `baseline_count` is how many (rule_id, file) matches the target repo was
+    expected to hold immediately BEFORE this fix was applied — see
+    `finding_still_present`. Callers that know it (cli.run_pipeline tracks
+    it) should pass it, so that fixing one of several same-rule instances in
+    one file counts as progress instead of burning every retry.
+    """
     finding = fix_result.finding
     current_fix = fix_result
 
     # Validate the fix that was already applied before this call, before
     # spending any retries on it.
-    still_present, tests_passed, test_output = _check(target_repo, semgrep_rulesets, finding)
+    still_present, tests_passed, test_output = _check(
+        target_repo, semgrep_rulesets, finding, baseline_count
+    )
     last_output = test_output
     if not still_present and tests_passed:
         return ValidationResult(
@@ -77,7 +119,9 @@ def validate_and_retry(
         # Every retry attempt gets validated, including the last one — a
         # fix that lands on the final retry must not be reverted just
         # because retries ran out before it could be checked.
-        still_present, tests_passed, test_output = _check(target_repo, semgrep_rulesets, finding)
+        still_present, tests_passed, test_output = _check(
+            target_repo, semgrep_rulesets, finding, baseline_count
+        )
         last_output = test_output
 
         if not still_present and tests_passed:

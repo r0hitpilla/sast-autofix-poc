@@ -1,7 +1,11 @@
 import os
 import re
+import sys
 import tempfile
 
+from git.exc import GitCommandError
+
+from git_utils import checkout_branch
 from models import Finding, FixResult
 
 DIFF_BLOCK_RE = re.compile(r"```(?:diff)?\n(.*?)```", re.DOTALL)
@@ -43,7 +47,15 @@ def apply_diff(repo, diff_text: str) -> bool:
     path = None
     try:
         fd, path = tempfile.mkstemp(suffix=".diff")
-        with os.fdopen(fd, "w") as f:
+        # newline="\n": on Windows, text mode would translate every "\n" to
+        # "\r\n", and git apply then fails to match the LF context lines in
+        # the working tree ("patch does not apply").
+        # Trailing "\n": extract_diff strips the model's fenced block, which
+        # eats the final newline, and git apply rejects a patch whose last
+        # hunk line is unterminated ("corrupt patch at line N").
+        if not diff_text.endswith("\n"):
+            diff_text += "\n"
+        with os.fdopen(fd, "w", newline="\n") as f:
             f.write(diff_text)
         repo.git.apply("--whitespace=fix", path)
         return True
@@ -55,14 +67,41 @@ def apply_diff(repo, diff_text: str) -> bool:
 
 
 def fix_finding(finding: Finding, ollama, repo, retry_feedback: str | None = None) -> FixResult:
-    model_output = ollama.generate(build_fix_prompt(finding, retry_feedback))
-    diff = extract_diff(model_output)
     branch = branch_name(finding)
+
+    try:
+        model_output = ollama.generate(build_fix_prompt(finding, retry_feedback))
+    except Exception as exc:
+        # Spec: an Ollama call failure must never take the pipeline down —
+        # log it and report the finding as unfixed so run_pipeline can skip
+        # it and carry on with the remaining findings.
+        print(
+            f"[fix error: ollama call failed for {finding.file}:{finding.line}: {exc}]",
+            file=sys.stderr,
+        )
+        return FixResult(finding=finding, diff="", applied=False, branch=branch)
+
+    diff = extract_diff(model_output)
 
     if not diff:
         return FixResult(finding=finding, diff="", applied=False, branch=branch)
 
-    repo.git.checkout("-b", branch)
+    checkout_branch(repo, branch)
+
+    if retry_feedback is not None:
+        # This is a retry: the previous attempt's rejected edits are still
+        # sitting uncommitted in the working tree (fix branches never
+        # commit). The fresh diff was generated against the ORIGINAL
+        # snippet, so it would hit a context mismatch against those edits.
+        # Discard just this finding's file back to HEAD before re-applying.
+        try:
+            repo.git.checkout("--", finding.file)
+        except GitCommandError as exc:
+            print(
+                f"[fix warning: could not restore {finding.file} before retry: {exc}]",
+                file=sys.stderr,
+            )
+
     applied = apply_diff(repo, diff)
 
     return FixResult(finding=finding, diff=diff, applied=applied, branch=branch)

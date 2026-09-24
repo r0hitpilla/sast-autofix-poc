@@ -2,7 +2,7 @@
   "results": [
     {
       "check_id": "python.flask.security.injection.sql-injection-using-db-cursor-execute",
-      "path": "sample_vuln_app/app.py",
+      "path": "app.py",
       "start": {"line": 41, "col": 5},
       "end": {"line": 45, "col": 30},
       "extra": {

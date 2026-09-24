@@ -28,9 +28,15 @@ def run_semgrep(target_repo: str, rulesets: list[str]) -> str:
     cmd = ["semgrep", "--json", "--quiet"]
     for ruleset in rulesets:
         cmd += ["--config", ruleset]
-    cmd.append(target_repo)
+    # Scan "." from inside the target repo rather than passing the repo path
+    # as an argument: Semgrep reports paths relative to what it was given, so
+    # this makes every Finding.file repo-root-relative (e.g. "app.py", not
+    # "sample_vuln_app/app.py"). That is the same frame GitPython uses for a
+    # `git.Repo(target_repo)`, so `repo.git.apply` / `add` / `checkout --`
+    # agree with Finding.file by construction instead of double-prefixing it.
+    cmd.append(".")
 
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(cmd, capture_output=True, text=True, cwd=target_repo)
     if result.returncode not in (0, 1):
         # semgrep exits 1 when findings exist; anything else is a real failure
         raise RuntimeError(
