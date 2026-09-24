@@ -1,1 +1,7 @@
 .worktrees/
+venv/
+__pycache__/
+*.pyc
+.env
+sample_vuln_app/
+.pytest_cache/

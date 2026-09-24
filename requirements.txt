@@ -1,0 +1,7 @@
+semgrep>=1.78.0
+ollama>=0.3.0
+laya>=0.3.0
+GitPython>=3.1.0
+PyGithub>=2.3.0
+PyYAML>=6.0
+pytest>=8.0.0
