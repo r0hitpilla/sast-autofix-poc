@@ -32,6 +32,8 @@ class FixResult:
     # and reverts restore to this — not to HEAD — because earlier validated
     # fixes in the same file are still uncommitted in the working tree.
     baseline: str | None = None
+    # Why the fix didn't apply, in words the LLM can act on during a retry.
+    error: str = ""
 
 
 @dataclass
@@ -41,6 +43,9 @@ class ValidationResult:
     test_output: str
     validated: bool
     attempts: int = 1
+    # Why the last attempt failed: "" when validated, else one of
+    # "no usable fix" | "still flagged" | "breaks code or tests".
+    failure: str = ""
 
 
 @dataclass

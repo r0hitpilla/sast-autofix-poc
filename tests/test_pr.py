@@ -134,3 +134,16 @@ def test_open_pr_keeps_pr_url_when_inline_review_fails():
                   line_comments=[{"path": "a", "line": 1, "side": "RIGHT", "body": "x"}])
 
     assert url == "https://github.com/o/r/pull/3"
+
+
+def test_commit_falls_back_to_bot_identity_when_git_has_none():
+    from git.exc import GitCommandError
+
+    repo = MagicMock()
+    repo.git.config.side_effect = GitCommandError("git config user.email", 1)
+
+    commit_validated_findings(repo, [make_entry()], strategy="single", run="1")
+
+    repo.git.custom_environment.assert_called_once()
+    assert repo.git.custom_environment.call_args.kwargs["GIT_AUTHOR_NAME"] == "sast-autofix[bot]"
+    repo.git.commit.assert_called_once()

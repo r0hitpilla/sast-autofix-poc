@@ -166,9 +166,15 @@ def test_run_pipeline_summarises_every_finding_outcome(tmp_path, capsys):
             return FixResult(finding=finding, diff="", applied=False, branch="autofix/x")
         return FixResult(finding=finding, diff="some diff", applied=True, branch="autofix/x")
 
-    validation_result = ValidationResult(
-        finding=to_fix, clean=True, test_output="no tests found", validated=True,
-    )
+    def fake_validate(fix_result, *args, **kwargs):
+        if not fix_result.applied:  # retries never produced a usable fix
+            return ValidationResult(
+                finding=fix_result.finding, clean=False, test_output="no edit blocks",
+                validated=False, attempts=3, failure="no usable fix",
+            )
+        return ValidationResult(
+            finding=fix_result.finding, clean=True, test_output="no tests found", validated=True,
+        )
 
     with patch("cli.load_config", return_value=MagicMock()), \
          patch("cli.scan", return_value=[to_fix, to_review, to_reject, no_diff]), \
@@ -177,7 +183,7 @@ def test_run_pipeline_summarises_every_finding_outcome(tmp_path, capsys):
          patch("cli.git.Repo", return_value=MagicMock()), \
          patch("cli.triage_finding", side_effect=fake_triage), \
          patch("cli.fix_finding", side_effect=fake_fix), \
-         patch("cli.validate_and_retry", return_value=validation_result), \
+         patch("cli.validate_and_retry", side_effect=fake_validate), \
          patch("cli.commit_validated_findings", return_value=["autofix/x"]), \
          patch("cli.build_pr_body", return_value="pr body"):
 
@@ -188,7 +194,7 @@ def test_run_pipeline_summarises_every_finding_outcome(tmp_path, capsys):
     assert "fixed and validated: 1" in out
     assert "sent to review: 1" in out
     assert "rejected (likely false positive): 1" in out
-    assert "fix generation failed: 1" in out
+    assert "no usable fix from the llm: 1" in out
 
 
 def test_run_pipeline_skips_entirely_while_an_autofix_pr_is_open(tmp_path, monkeypatch, capsys):

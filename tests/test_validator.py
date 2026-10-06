@@ -250,3 +250,42 @@ def test_validate_rejects_a_fix_that_clears_the_scan_but_breaks_the_code(tmp_pat
 
     assert result.validated is False
     assert "undefined name 'conn'" in result.test_output
+
+
+def test_unusable_first_reply_is_retried_with_the_reason():
+    finding = make_finding()
+    unusable = FixResult(
+        finding=finding, diff="", applied=False, branch="autofix/x",
+        error="Your reply contained no edit blocks.",
+    )
+    good = FixResult(finding=finding, diff="d", applied=True, branch="autofix/x")
+    repo = MagicMock()
+
+    with patch("validator.scan", return_value=[]), \
+         patch("validator.run_test_suite", return_value=(True, "no tests found")), \
+         patch("validator.fix_finding", return_value=good) as mock_fix:
+        result = validate_and_retry(
+            unusable, MagicMock(), repo, target_repo=".",
+            semgrep_rulesets=[], max_retries=2,
+        )
+
+    assert result.validated is True
+    assert result.attempts == 2
+    assert mock_fix.call_args.kwargs["retry_feedback"] == "Your reply contained no edit blocks."
+
+
+def test_never_usable_reply_reports_no_usable_fix():
+    finding = make_finding()
+    unusable = FixResult(finding=finding, diff="", applied=False, branch="b", error="no blocks")
+
+    with patch("validator.scan") as mock_scan, \
+         patch("validator.fix_finding", return_value=unusable):
+        result = validate_and_retry(
+            unusable, MagicMock(), MagicMock(), target_repo=".",
+            semgrep_rulesets=[], max_retries=2,
+        )
+
+    assert result.validated is False
+    assert result.failure == "no usable fix"
+    assert result.attempts == 3
+    mock_scan.assert_not_called()  # nothing applied, nothing to rescan

@@ -21,6 +21,16 @@ def read_lines(target_repo: str | None, path: str, start: int, end: int) -> str 
     return "\n".join(lines[start - 1:end])
 
 
+def clean_rule_id(check_id: str) -> str:
+    """Semgrep prefixes rules loaded from a local file with that file's
+    dotted absolute path ("home.user.proj.rules.my-rule"); keep just the
+    rule's own id so it reads well in reports and PRs."""
+    marker = ".rules."
+    if marker in check_id and check_id.startswith(("home.", "Users.", "tmp.", "root.")):
+        return check_id.rsplit(marker, 1)[1]
+    return check_id
+
+
 def parse_semgrep_json(raw_json: str, target_repo: str | None = None) -> list[Finding]:
     data = json.loads(raw_json)
     findings = []
@@ -43,7 +53,7 @@ def parse_semgrep_json(raw_json: str, target_repo: str | None = None) -> list[Fi
         findings.append(Finding(
             file=result["path"],
             line=result["start"]["line"],
-            rule_id=result["check_id"],
+            rule_id=clean_rule_id(result["check_id"]),
             cwe=cwe,
             message=extra.get("message", ""),
             snippet=snippet,

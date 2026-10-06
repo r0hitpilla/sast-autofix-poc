@@ -124,19 +124,26 @@ def apply_edit(content: str, original: str, replacement: str) -> str | None:
     return "".join(lines[:start]) + text + "".join(lines[end:])
 
 
-def apply_edits(repo, file: str, edits: list[tuple[str, str]]) -> bool:
+def apply_edits(repo, file: str, edits: list[tuple[str, str]]) -> tuple[bool, str]:
     """All-or-nothing, like `git apply`: if any block fails to match, the
-    file is left exactly as it was."""
+    file is left exactly as it was. Returns (applied, reason it didn't)."""
     content = read_file(repo, file)
     if content is None:
-        return False
-    for original, replacement in edits:
-        content = apply_edit(content, original, replacement)
-        if content is None:
-            return False
+        return False, f"{file} could not be read"
+    for n, (original, replacement) in enumerate(edits, start=1):
+        updated = apply_edit(content, original, replacement)
+        if updated is None:
+            where = "appears more than once" if content.count(original) > 1 else "was not found"
+            return False, (
+                f"The ORIGINAL text of edit block {n} {where} in {file}. Copy "
+                "the ORIGINAL lines exactly from the numbered file contents "
+                "(without the line numbers), with enough lines to be unique:\n"
+                f"{original.rstrip()[:500]}"
+            )
+        content = updated
     with open(os.path.join(repo.working_tree_dir, file), "w", newline="") as f:
         f.write(content)
-    return True
+    return True, ""
 
 
 def extract_diff(model_output: str) -> str:
@@ -237,8 +244,18 @@ def fix_finding(
         diff = extract_diff(model_output)
 
     if not diff:
+        print(
+            f"[fix warning: no edit blocks in model reply for {finding.file}:"
+            f"{finding.line}; reply began: {model_output[:300]!r}]",
+            file=sys.stderr,
+        )
         return FixResult(
-            finding=finding, diff="", applied=False, branch=branch, baseline=baseline
+            finding=finding, diff="", applied=False, branch=branch, baseline=baseline,
+            error=(
+                "Your reply contained no edit blocks. Reply with ONLY "
+                "<<<<<<< ORIGINAL / ======= / >>>>>>> FIXED blocks, no prose "
+                "and no code fences."
+            ),
         )
 
     # Apply first, branch second: both apply paths are all-or-nothing, so a
@@ -246,10 +263,17 @@ def fix_finding(
     # then stay where it was, not be stranded on a fresh fix branch that
     # every later finding would silently build on. Uncommitted edits carry
     # over to the branch on checkout.
-    applied = apply_edits(repo, finding.file, edits) if edits else apply_diff(repo, diff)
+    if edits:
+        applied, error = apply_edits(repo, finding.file, edits)
+    else:
+        applied = apply_diff(repo, diff)
+        error = "" if applied else (
+            "Your diff did not apply. Use ORIGINAL/FIXED edit blocks instead."
+        )
     if applied:
         checkout_branch(repo, branch)
 
     return FixResult(
-        finding=finding, diff=diff, applied=applied, branch=branch, baseline=baseline
+        finding=finding, diff=diff, applied=applied, branch=branch,
+        baseline=baseline, error=error,
     )

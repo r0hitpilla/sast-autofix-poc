@@ -2,6 +2,8 @@ import os
 import sys
 from datetime import datetime
 
+from git.exc import GitCommandError
+
 from diff_utils import format_range
 from git_utils import checkout_branch
 from models import Hunk, TriageResult, ValidationResult
@@ -197,6 +199,26 @@ def run_id() -> str:
     return os.environ.get("GITHUB_RUN_ID") or datetime.now().strftime("%Y%m%d-%H%M%S")
 
 
+BOT_IDENTITY = {
+    "GIT_AUTHOR_NAME": "sast-autofix[bot]",
+    "GIT_AUTHOR_EMAIL": "sast-autofix@users.noreply.github.com",
+    "GIT_COMMITTER_NAME": "sast-autofix[bot]",
+    "GIT_COMMITTER_EMAIL": "sast-autofix@users.noreply.github.com",
+}
+
+
+def _commit(repo, message: str) -> None:
+    """Commit as the repo's configured user, or as the bot if there is none
+    (a fresh machine or container has no git identity and `git commit`
+    would abort the whole run after every fix had already validated)."""
+    try:
+        repo.git.config("user.email")
+        repo.git.commit("-m", message)
+    except GitCommandError:
+        with repo.git.custom_environment(**BOT_IDENTITY):
+            repo.git.commit("-m", message)
+
+
 def commit_validated_findings(repo, entries, strategy: str, run: str | None = None) -> list[str]:
     validated_entries = [(t, v) for t, v in entries if v.validated]
     branches = []
@@ -208,7 +230,7 @@ def commit_validated_findings(repo, entries, strategy: str, run: str | None = No
         checkout_branch(repo, branch)
         for triage, _ in validated_entries:
             repo.git.add(triage.finding.file)
-        repo.git.commit("-m", "fix: automated security fixes from sast-autofix-poc")
+        _commit(repo, "fix: automated security fixes from sast-autofix-poc")
         branches = [branch] * len(validated_entries)
     else:  # per-finding
         seen = {}
@@ -226,7 +248,7 @@ def commit_validated_findings(repo, entries, strategy: str, run: str | None = No
 
             checkout_branch(repo, branch)
             repo.git.add(finding.file)
-            repo.git.commit("-m", f"fix: {finding.cwe} at {finding.file}:{finding.line}")
+            _commit(repo, f"fix: {finding.cwe} at {finding.file}:{finding.line}")
             branches.append(branch)
 
     return branches

@@ -180,38 +180,49 @@ def validate_and_retry(
     """
     finding = fix_result.finding
     baseline = fix_result.baseline
-
-    # Validate the fix that was already applied before this call, before
-    # spending any retries on it.
-    still_present, tests_passed, test_output, remaining_lines = _check(
-        target_repo, semgrep_rulesets, finding, baseline_count, baseline
-    )
     attempts = 1
-    _progress(finding, attempts, still_present, tests_passed)
-    if not still_present and tests_passed:
-        return ValidationResult(
-            finding=finding, clean=True, test_output=test_output,
-            validated=True, attempts=attempts,
-        )
 
-    applied_note = ""
-    for _ in range(max_retries):
+    def failure_reason(applied: bool, still_present: bool) -> str:
+        if not applied:
+            return "no usable fix"
+        return "still flagged" if still_present else "breaks code or tests"
+
+    if fix_result.applied:
+        # Validate the fix that was already applied before this call,
+        # before spending any retries on it.
+        still_present, tests_passed, test_output, remaining_lines = _check(
+            target_repo, semgrep_rulesets, finding, baseline_count, baseline
+        )
+        _progress(finding, attempts, still_present, tests_passed)
+        if not still_present and tests_passed:
+            return ValidationResult(
+                finding=finding, clean=True, test_output=test_output,
+                validated=True, attempts=attempts,
+            )
         feedback = build_feedback(
             finding, still_present, remaining_lines, tests_passed, test_output
-        ) + applied_note
+        )
+    else:
+        # The first reply was unusable (no edit blocks, or they didn't match
+        # the file). That's a failed attempt like any other: retry with the
+        # specific reason rather than giving up on a confirmed finding.
+        print(f"    [fix attempt {attempts}] {fix_result.error[:120]}", file=sys.stderr, flush=True)
+        still_present, tests_passed, test_output = True, True, fix_result.error
+        feedback = fix_result.error
+    last_applied = fix_result.applied
+
+    for _ in range(max_retries):
         current_fix = fix_finding(
             finding, ollama, repo, retry_feedback=feedback, baseline=baseline
         )
         attempts += 1
+        last_applied = current_fix.applied
 
         if not current_fix.applied:
-            applied_note = (
-                " NOTE: the previous retry's diff failed to apply to the "
-                "repo at all — produce a diff that applies cleanly against "
-                "the numbered file contents shown above."
-            )
-        else:
-            applied_note = ""
+            print(f"    [fix attempt {attempts}] {current_fix.error[:120]}", file=sys.stderr, flush=True)
+            still_present, test_output = True, current_fix.error
+            feedback = current_fix.error
+            continue
 
         # Every retry attempt gets validated, including the last one — a
         # fix that lands on the final retry must not be reverted just
@@ -219,16 +230,16 @@ def validate_and_retry(
         still_present, tests_passed, test_output, remaining_lines = _check(
             target_repo, semgrep_rulesets, finding, baseline_count, baseline
         )
-        if current_fix.applied:
-            _progress(finding, attempts, still_present, tests_passed)
-        else:
-            print(f"    [fix attempt {attempts}] diff did not apply", file=sys.stderr, flush=True)
+        _progress(finding, attempts, still_present, tests_passed)
 
         if not still_present and tests_passed:
             return ValidationResult(
                 finding=finding, clean=True, test_output=test_output,
                 validated=True, attempts=attempts,
             )
+        feedback = build_feedback(
+            finding, still_present, remaining_lines, tests_passed, test_output
+        )
 
     # The rejected fix's edits are still sitting uncommitted in the working
     # tree (fix branches never commit — see fixer.fix_finding). Undo just
@@ -241,4 +252,5 @@ def validate_and_retry(
     return ValidationResult(
         finding=finding, clean=False, test_output=test_output,
         validated=False, attempts=attempts,
+        failure=failure_reason(last_applied, still_present),
     )

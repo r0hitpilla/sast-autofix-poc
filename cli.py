@@ -124,8 +124,8 @@ def run_pipeline(
         "sent to review (CI/workflow file, never auto-fixed)": 0,
         "rejected (likely false positive)": 0,
         "skipped (file not found in target repo)": 0,
-        "fix generation failed": 0,
-        "fix did not apply": 0,
+        "resolved by an earlier fix": 0,
+        "no usable fix from the llm": 0,
         "fix applied but failed validation": 0,
     }
 
@@ -178,16 +178,21 @@ def run_pipeline(
             record(triage_result, "skipped (file not found in target repo)")
             continue
 
-        with timed(timings, "fix + rescan loop"):
-            fix_result = fix_finding(finding, ollama, repo)
-            if not fix_result.diff:
-                record(triage_result, "fix generation failed")
-                continue
-            if not fix_result.applied:
-                record(triage_result, "fix did not apply")
+        rule_file_key = (finding.rule_id, finding.file)
+        if entries:
+            # An earlier fix may already have removed this one too (e.g. two
+            # rules flagging the same SQL string); don't spend LLM time on it.
+            with timed(timings, "fix + rescan loop"):
+                still_there = count_same_rule_and_file(
+                    finding, scan(target_repo, cfg.semgrep_rulesets)
+                )
+            if still_there < remaining[rule_file_key]:
+                remaining[rule_file_key] = still_there
+                record(triage_result, "resolved by an earlier fix")
                 continue
 
-            rule_file_key = (finding.rule_id, finding.file)
+        with timed(timings, "fix + rescan loop"):
+            fix_result = fix_finding(finding, ollama, repo)
             validation_result = validate_and_retry(
                 fix_result, ollama, repo, target_repo,
                 cfg.semgrep_rulesets, cfg.max_fix_retries,
@@ -197,6 +202,8 @@ def run_pipeline(
         if validation_result.validated:
             remaining[rule_file_key] -= 1
             record(triage_result, "fixed and validated", validation_result)
+        elif validation_result.failure == "no usable fix":
+            record(triage_result, "no usable fix from the llm", validation_result)
         else:
             record(triage_result, "fix applied but failed validation", validation_result)
 
@@ -242,6 +249,8 @@ def run_pipeline(
             for c in comments:
                 lines = f"L{c['start_line']}-L{c['line']}" if "start_line" in c else f"L{c['line']}"
                 print(f"  {c['path']} {lines} ({c['side']}): {c['body'].splitlines()[0]}")
+        # Leave the local repo where we found it; the commit stays on its branch.
+        repo.git.checkout("main")
         print("Report:", write_report(report, report_dir))
         return
 

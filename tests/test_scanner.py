@@ -79,3 +79,14 @@ def test_local_rule_paths_resolve_against_the_config_dir(tmp_path):
     (tmp_path / "rules").mkdir()
     assert resolve_ruleset("rules/", str(tmp_path)) == os.path.join(str(tmp_path), "rules/")
     assert resolve_ruleset("p/owasp-top-ten", str(tmp_path)) == "p/owasp-top-ten"
+
+
+def test_local_rule_ids_drop_the_filesystem_prefix():
+    from scanner import clean_rule_id
+
+    assert clean_rule_id(
+        "home.rcxdigital.SAST-AUTOFIX-POC.sast-autofix-poc.rules.flask-send-file-path-traversal"
+    ) == "flask-send-file-path-traversal"
+    assert clean_rule_id("python.flask.security.injection.tainted-sql-string") == (
+        "python.flask.security.injection.tainted-sql-string"
+    )
