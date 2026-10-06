@@ -5,7 +5,7 @@ is ever lost to a schema that didn't anticipate it."""
 from datetime import datetime
 
 from sqlalchemy import (JSON, Boolean, DateTime, Float, ForeignKey, Index, Integer,
-                        String, Text, create_engine)
+                        String, Text, create_engine, text)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, sessionmaker
 
@@ -58,6 +58,48 @@ class Run(Base):
         back_populates="run", cascade="all, delete-orphan", order_by="FindingRow.position")
 
     __table_args__ = (Index("ix_runs_repo_branch_started", "repository", "base_branch", "started_at"),)
+
+
+class User(Base):
+    __tablename__ = "users"
+    # Sign-in uses the name, so it must be unique regardless of case.
+    __table_args__ = (Index("ix_users_name_lower", text("lower(name)"), unique=True),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    email: Mapped[str] = mapped_column(Text, unique=True)      # stored lower-case; for contact and audit
+    name: Mapped[str] = mapped_column(Text)                    # the sign-in name
+    role: Mapped[str] = mapped_column(String(32))              # see auth.ROLES
+    password_hash: Mapped[str] = mapped_column(Text)           # scrypt$salt$digest
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AuthSession(Base):
+    """A signed-in browser. Only a hash of the cookie's token is stored."""
+    __tablename__ = "auth_sessions"
+
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    ip: Mapped[str | None] = mapped_column(String(64))
+    user_agent: Mapped[str | None] = mapped_column(Text)
+
+
+class AuditEvent(Base):
+    """Append-only record of who did what. Never edited, only read."""
+    __tablename__ = "audit_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    actor_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), index=True)
+    actor_email: Mapped[str | None] = mapped_column(Text)
+    action: Mapped[str] = mapped_column(String(64), index=True)
+    outcome: Mapped[str] = mapped_column(String(16))           # success | failure | denied
+    target: Mapped[str | None] = mapped_column(Text)
+    detail: Mapped[dict] = mapped_column(JSONType, default=dict)
+    ip: Mapped[str | None] = mapped_column(String(64))
 
 
 class TrackedFinding(Base):

@@ -197,7 +197,7 @@ def run_pipeline(
         findings = scan(target_repo, cfg.semgrep_rulesets, cfg.engines)
     ollama = OllamaClient(host=cfg.ollama_host, model=cfg.ollama_model)
     # What earlier runs found and tried for this repository (empty if no dashboard).
-    history = fetch_history(cfg.dashboard_url, repo_full_name)
+    history = fetch_history(cfg.dashboard_url, repo_full_name, cfg.dashboard_token)
     laya = LayaClient(model=cfg.laya_model)
 
     # Every finding ends up in exactly one of these buckets — a human reading

@@ -9,33 +9,42 @@ Phase 1 is read-only and has no sign-in, so it must only listen on
 import csv
 import io
 import os
-from collections.abc import Iterator
+import re
 from datetime import datetime, timedelta, timezone
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
-from sqlalchemy import text
+from pydantic import BaseModel, Field
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.orm import Session
 
 from . import queries
-from .db import make_sessionmaker
+from .auth import (COOKIE, MIN_PASSWORD_LENGTH, ROLE_LABELS, ROLES, SESSION_TTL, authorize,
+                   burn_password_time, client_ip, hash_password, lockout_active, now,
+                   permissions_for, record, revoke_user_sessions, start_session, token_hash,
+                   verify_password)
+from .db import AuditEvent, AuthSession, User
+from .deps import get_session
 from .settings import Settings, get_settings
 from .sources import github, ollama, system
 
-VERSION = "1.0.0"
-_sessionmaker = None
-
-
-def get_session() -> Iterator[Session]:
-    global _sessionmaker
-    if _sessionmaker is None:
-        _sessionmaker = make_sessionmaker()
-    with _sessionmaker() as session:
-        yield session
-
+VERSION = "1.1.0"
 
 app = FastAPI(title="SAST Autofix dashboard", version=VERSION, docs_url="/api/docs",
-              openapi_url="/api/openapi.json", redoc_url=None)
+              openapi_url="/api/openapi.json", redoc_url=None,
+              # Every request passes the sign-in and role check; see auth.py.
+              dependencies=[Depends(authorize)])
+
+
+@app.middleware("http")
+async def require_json_for_changes(request: Request, call_next):
+    """Cross-site forms can't send JSON without a preflight, so requiring JSON
+    for every change under /api/ blocks CSRF. Runs before routing, so it also
+    covers requests whose bodies would otherwise fail validation first."""
+    if (request.url.path.startswith("/api/") and request.method not in ("GET", "HEAD", "OPTIONS")
+            and "application/json" not in request.headers.get("content-type", "")):
+        return JSONResponse({"detail": "requests that change data must be JSON"}, status_code=415)
+    return await call_next(request)
 
 
 @app.middleware("http")
@@ -183,6 +192,180 @@ def export(fmt: str, repository: str | None = Repo, days: int = Query(30, ge=1, 
         return Response(buf.getvalue(), media_type="text/csv",
                         headers={"Content-Disposition": f'attachment; filename="{name}.csv"'})
     raise HTTPException(404, "unknown export format")
+
+
+# ---- sign-in, users and audit ----------------------------------------------
+
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+class LoginIn(BaseModel):
+    name: str = Field(max_length=120)
+    password: str = Field(max_length=1024)
+
+
+class UserIn(BaseModel):
+    name: str = Field(min_length=2, max_length=120)
+    email: str = Field(max_length=254)
+    role: str = Field(max_length=32)
+    password: str = Field(max_length=1024)
+
+
+class UserPatch(BaseModel):
+    name: str | None = Field(default=None, min_length=2, max_length=120)
+    role: str | None = Field(default=None, max_length=32)
+    active: bool | None = None
+    password: str | None = Field(default=None, max_length=1024)
+
+
+def _me(user: User) -> dict:
+    return {"id": user.id, "email": user.email, "name": user.name, "role": user.role,
+            "role_label": ROLE_LABELS.get(user.role, user.role),
+            "permissions": sorted(permissions_for(user.role))}
+
+
+def _user_json(user: User) -> dict:
+    return {**_me(user), "active": user.active, "created_at": queries.iso(user.created_at),
+            "last_login_at": queries.iso(user.last_login_at)}
+
+
+def _check_role(role: str) -> None:
+    if role not in ROLES:
+        raise HTTPException(422, f"role must be one of: {', '.join(ROLES)}")
+
+
+def _check_password(password: str) -> None:
+    if len(password) < MIN_PASSWORD_LENGTH:
+        raise HTTPException(422, f"password must be at least {MIN_PASSWORD_LENGTH} characters")
+
+
+def _by_name(session: Session, name: str) -> User | None:
+    return session.scalar(select(User).where(func.lower(User.name) == name.strip().lower()))
+
+
+@app.post("/api/auth/login")
+def login(body: LoginIn, request: Request, response: Response, session: Session = Depends(get_session)):
+    name = body.name.strip().lower()
+    if lockout_active(session, name):
+        record(session, "login_failed", "failure", actor_email=None, target=name,
+               detail={"reason": "locked"}, ip=client_ip(request))
+        session.commit()
+        raise HTTPException(429, "Too many failed sign-in attempts. Try again in 15 minutes.")
+    user = _by_name(session, body.name)
+    if user is None:
+        burn_password_time()
+        ok = False
+    else:
+        ok = user.active and verify_password(body.password, user.password_hash)
+    if not ok:
+        record(session, "login_failed", "failure", target=name, ip=client_ip(request))
+        session.commit()
+        raise HTTPException(401, "Name or password is incorrect.")
+    token = start_session(session, user, request)
+    user.last_login_at = now()
+    record(session, "login", actor=user, ip=client_ip(request))
+    session.commit()
+    response.set_cookie(COOKIE, token, max_age=int(SESSION_TTL.total_seconds()), httponly=True,
+                        samesite="strict", secure=request.url.scheme == "https", path="/")
+    return _me(user)
+
+
+@app.post("/api/auth/logout")
+def logout(request: Request, response: Response, user: User = Depends(authorize),
+           session: Session = Depends(get_session)):
+    token = request.cookies.get(COOKIE)
+    if token:
+        session.execute(delete(AuthSession).where(AuthSession.token_hash == token_hash(token)))
+    record(session, "logout", actor=user, ip=client_ip(request))
+    session.commit()
+    response.delete_cookie(COOKIE, path="/")
+    return {"ok": True}
+
+
+@app.get("/api/auth/me")
+def me(user: User = Depends(authorize)):
+    return _me(user)
+
+
+@app.get("/api/users")
+def users(session: Session = Depends(get_session)):
+    rows = session.scalars(select(User).order_by(User.email)).all()
+    return {"items": [_user_json(u) for u in rows]}
+
+
+@app.post("/api/users")
+def create_user(body: UserIn, request: Request, actor: User = Depends(authorize),
+                session: Session = Depends(get_session)):
+    email = body.email.strip().lower()
+    name = body.name.strip()
+    if not EMAIL_RE.match(email):
+        raise HTTPException(422, "enter a valid email address")
+    _check_role(body.role)
+    _check_password(body.password)
+    if _by_name(session, name):
+        raise HTTPException(409, "a user with that name already exists")
+    if session.scalar(select(User.id).where(User.email == email)):
+        raise HTTPException(409, "a user with that email already exists")
+    user = User(email=email, name=name, role=body.role,
+                password_hash=hash_password(body.password), active=True, created_at=now())
+    session.add(user)
+    session.flush()
+    record(session, "user_created", actor=actor, target=email, detail={"role": body.role},
+           ip=client_ip(request))
+    session.commit()
+    return _user_json(user)
+
+
+@app.patch("/api/users/{user_id}")
+def update_user(user_id: int, body: UserPatch, request: Request, actor: User = Depends(authorize),
+                session: Session = Depends(get_session)):
+    user = session.get(User, user_id)
+    if user is None:
+        raise HTTPException(404, "no such user")
+    changes = {}
+    if body.name is not None and body.name.strip() != user.name:
+        clash = _by_name(session, body.name)
+        if clash is not None and clash.id != user.id:
+            raise HTTPException(409, "a user with that name already exists")
+        changes["name"] = {"from": user.name, "to": body.name.strip()}
+        user.name = body.name.strip()
+    if body.role is not None and body.role != user.role:
+        _check_role(body.role)
+        changes["role"] = {"from": user.role, "to": body.role}
+        user.role = body.role
+    if body.active is not None and body.active != user.active:
+        changes["active"] = {"from": user.active, "to": body.active}
+        user.active = body.active
+    if body.password is not None:
+        _check_password(body.password)
+        user.password_hash = hash_password(body.password)
+        changes["password"] = "changed"
+    # The product must always have someone who can manage users.
+    active_admins = session.scalar(select(func.count(User.id)).where(User.role == "admin", User.active.is_(True)))
+    if active_admins == 0:
+        raise HTTPException(409, "at least one active admin is needed")
+    if changes.get("role") or changes.get("active") or "password" in changes:
+        revoke_user_sessions(session, user.id)  # takes effect at once, not at next sign-in
+    record(session, "user_updated", actor=actor, target=user.email, detail=changes, ip=client_ip(request))
+    session.commit()
+    return _user_json(user)
+
+
+@app.get("/api/audit")
+def audit(action: str | None = Query(None, max_length=64),
+          limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0),
+          session: Session = Depends(get_session)):
+    stmt = select(AuditEvent)
+    count = select(func.count(AuditEvent.id))
+    if action:
+        stmt = stmt.where(AuditEvent.action == action)
+        count = count.where(AuditEvent.action == action)
+    rows = session.scalars(stmt.order_by(AuditEvent.at.desc(), AuditEvent.id.desc())
+                           .offset(offset).limit(limit)).all()
+    return {"total": session.scalar(count) or 0, "items": [{
+        "id": e.id, "at": queries.iso(e.at), "actor_email": e.actor_email, "action": e.action,
+        "outcome": e.outcome, "target": e.target, "detail": e.detail, "ip": e.ip,
+    } for e in rows]}
 
 
 @app.get("/api/{rest:path}")

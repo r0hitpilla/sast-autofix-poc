@@ -4,10 +4,15 @@ export class ApiError extends Error {
   }
 }
 
-/** GET a JSON API path (relative to /api). Throws ApiError on non-2xx. */
-export async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
-  const resp = await fetch(`/api${path}`, { signal, headers: { Accept: "application/json" } });
+/** Where a signed-out visitor is sent. */
+export const LOGIN_PATH = "/login";
+
+async function parse<T>(resp: Response): Promise<T> {
   if (!resp.ok) {
+    if (resp.status === 401 && !window.location.pathname.startsWith(LOGIN_PATH)) {
+      // The session ended (signed out elsewhere, expired, or disabled): sign in again.
+      window.location.assign(LOGIN_PATH);
+    }
     let detail = resp.statusText;
     try {
       const body = (await resp.json()) as { detail?: unknown };
@@ -18,6 +23,22 @@ export async function getJson<T>(path: string, signal?: AbortSignal): Promise<T>
     throw new ApiError(resp.status, detail || `HTTP ${resp.status}`);
   }
   return (await resp.json()) as T;
+}
+
+/** Send a JSON body (POST, PATCH). The server refuses any other content type for changes. */
+export async function sendJson<T>(method: "POST" | "PATCH", path: string, body: unknown): Promise<T> {
+  const resp = await fetch(`/api${path}`, {
+    method, credentials: "same-origin",
+    headers: { Accept: "application/json", "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return parse<T>(resp);
+}
+
+/** GET a JSON API path (relative to /api). Throws ApiError on non-2xx. */
+export async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
+  const resp = await fetch(`/api${path}`, { signal, credentials: "same-origin", headers: { Accept: "application/json" } });
+  return parse<T>(resp);
 }
 
 export function qs(params: Record<string, string | number | null | undefined>): string {

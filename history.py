@@ -17,13 +17,19 @@ import urllib.request
 from identity import finding_fingerprint
 
 
-def fetch_history(base_url, repository: str, timeout: float = 2.0) -> dict:
-    """fingerprint -> record, or {} when there is no dashboard to ask."""
+def fetch_history(base_url, repository: str, token=None, timeout: float = 2.0) -> dict:
+    """fingerprint -> record, or {} when there is no dashboard to ask.
+
+    `token` is the dashboard's machine token (SAST_HISTORY_TOKEN there,
+    SAST_DASHBOARD_TOKEN here); without it the dashboard refuses the request.
+    """
     if not isinstance(base_url, str) or not base_url or not repository:
         return {}
     query = urllib.parse.urlencode({"repository": repository})
+    headers = {"Authorization": f"Bearer {token}"} if isinstance(token, str) and token else {}
+    request = urllib.request.Request(f"{base_url.rstrip('/')}/api/history?{query}", headers=headers)
     try:
-        with urllib.request.urlopen(f"{base_url.rstrip('/')}/api/history?{query}", timeout=timeout) as resp:
+        with urllib.request.urlopen(request, timeout=timeout) as resp:
             items = json.load(resp)["items"]
     except (OSError, ValueError, KeyError) as exc:
         print(f"[history] dashboard unavailable, continuing without history: {exc}", file=sys.stderr)

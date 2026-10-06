@@ -9,6 +9,9 @@ DEFAULT_DB_URL = "postgresql+psycopg:///sast_autofix"  # local socket, OS-user (
 @dataclass(frozen=True)
 class Settings:
     db_url: str = field(default_factory=lambda: os.environ.get("SAST_DB_URL", DEFAULT_DB_URL))
+    # Optional. Bearer token the pipeline uses to read finding history without a
+    # user session. Unset: machine access is off and only signed-in users can read.
+    history_token: str | None = field(default_factory=lambda: os.environ.get("SAST_HISTORY_TOKEN") or None)
     # Optional. Read-only GitHub token for live PR state; without it the
     # dashboard shows PR data as recorded by the pipeline.
     github_token: str | None = field(default_factory=lambda: os.environ.get("GITHUB_TOKEN") or None)

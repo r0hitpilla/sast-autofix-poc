@@ -15,12 +15,23 @@ function mockApi(routes: Routes) {
     const key = url.pathname.replace(/^\/api/, "");
     const hit = Object.entries(routes).find(([k]) => k === key || (k.endsWith("*") && key.startsWith(k.slice(0, -1))));
     if (!hit) return new Response(JSON.stringify({ detail: "not found" }), { status: 404 });
-    const v = hit[1];
-    return typeof v === "function" ? (v as () => Response)() : new Response(JSON.stringify(v), { status: 200 });
+    const v = hit[1] as unknown;
+    if (typeof v === "function") return (v as () => Response)();
+    if (v && typeof v === "object" && "status" in v && "body" in v) {
+      const { status, body } = v as { status: number; body: unknown };
+      return new Response(JSON.stringify(body), { status });
+    }
+    return new Response(JSON.stringify(v), { status: 200 });
   });
 }
 
+const admin = {
+  id: 1, email: "admin@example.com", name: "Admin", role: "admin", role_label: "Admin",
+  permissions: ["dashboard:read", "users:manage", "audit:read"],
+};
+
 const shellApi = {
+  "/auth/me": admin,
   "/meta": { version: "1.0.0", repositories: ["o/r"] },
   "/findings": { total: 6, items: [] },
   "/prs": { items: [] },
@@ -93,5 +104,22 @@ describe("pages", () => {
     mockApi(shellApi);
     at("/nope");
     expect(await screen.findByText(/This page doesn’t exist/)).toBeInTheDocument();
+  });
+});
+
+describe("sign-in", () => {
+  it("shows the sign-in page when there is no session", async () => {
+    mockApi({ "/auth/me": { status: 401, body: { detail: "sign in required" } } });
+    at("/");
+    expect(await screen.findByRole("heading", { name: "Sign in" })).toBeInTheDocument();
+  });
+
+  it("shows user administration and the audit log only to roles that have them", async () => {
+    mockApi({ ...shellApi, "/auth/me": { ...admin, role: "developer", role_label: "Developer",
+                                         permissions: ["dashboard:read"] } });
+    at("/");
+    await screen.findAllByText("Overview");
+    expect(screen.queryByText("Users & roles")).not.toBeInTheDocument();
+    expect(screen.queryByText("Audit Log")).not.toBeInTheDocument();
   });
 });

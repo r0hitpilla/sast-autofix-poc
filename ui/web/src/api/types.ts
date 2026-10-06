@@ -121,3 +121,16 @@ export interface Report {
 }
 
 export interface Meta { version: string; repositories: string[] }
+
+export interface Me {
+  id: number; email: string; name: string; role: string; role_label: string; permissions: string[];
+}
+
+export interface UserRow extends Me {
+  active: boolean; created_at: string | null; last_login_at: string | null;
+}
+
+export interface AuditEvent {
+  id: number; at: string | null; actor_email: string | null; action: string; outcome: string;
+  target: string | null; detail: Record<string, unknown>; ip: string | null;
+}
