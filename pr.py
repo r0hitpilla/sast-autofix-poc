@@ -5,6 +5,7 @@ from git.exc import GitCommandError
 from diff_utils import format_range
 from models import Hunk, TriageResult, ValidationResult
 from triage import summarize_answer
+from validator import tail
 
 
 def assign_hunks(
@@ -65,9 +66,11 @@ def format_hunk(hunk: Hunk) -> str:
 
 
 def _validation_note(validation: ValidationResult) -> str:
+    if validation.note:
+        return f"⚠️ {validation.note}"
     note = "re-scan clean" if validation.clean else "re-scan still flagged"
     if validation.test_output and validation.test_output != "no tests found":
-        note += f"; tests: {validation.test_output[:500]}"
+        note += f"; tests: {tail(validation.test_output, 300)}"
     else:
         note += f"; {validation.test_output}"
     return note
@@ -96,7 +99,7 @@ def build_suggestions(unresolved) -> str:
             f"**Flagged code:**\n```\n{finding.snippet}\n```\n\n"
             + (f"**Analysis:** {analysis}\n\n" if analysis else "")
             + (
-                f"**Why the auto-fix was rejected:** {validation.test_output[:400]}\n\n"
+                f"**Why the auto-fix was rejected:**\n```\n{tail(validation.test_output, 800)}\n```\n\n"
                 if validation and not validation.validated else ""
             )
             + (

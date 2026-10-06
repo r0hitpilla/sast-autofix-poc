@@ -12,4 +12,5 @@ semgrep:
     - p/security-audit
     - p/owasp-top-ten
     - rules/   # custom rules (e.g. Flask path traversal) the public packs miss
+fix_review: true    # LLM reviews each fix against best practice before accepting it
 max_fix_retries: 3   # LLM re-fix + rescan rounds after the first attempt

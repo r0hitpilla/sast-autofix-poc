@@ -5,7 +5,7 @@ import tempfile
 
 from git.exc import GitCommandError
 
-from code_context import numbered_context
+from code_context import numbered_context, numbered_header
 from git_utils import checkout_branch
 from models import Finding, FixResult
 
@@ -36,7 +36,7 @@ lines other code depends on."""
 
 
 def build_fix_prompt(
-    finding: Finding, retry_feedback: str | None = None, context: str = ""
+    finding: Finding, retry_feedback: str | None = None, context: str = "", header: str = ""
 ) -> str:
     prompt = (
         "You are a security engineer writing a minimal, correct fix for a "
@@ -49,6 +49,12 @@ def build_fix_prompt(
         f"Issue: {finding.message}\n\n"
         f"Vulnerable code:\n{finding.snippet}\n"
     )
+    if header:
+        prompt += (
+            "\nTop of the file — its existing imports (the number before each "
+            "'|' is the line number, not part of the code):\n"
+            f"{header}\n"
+        )
     if context:
         prompt += (
             "\nCurrent file contents around the finding (the number before "
@@ -221,9 +227,12 @@ def fix_finding(
         baseline = read_file(repo, finding.file)
 
     context = numbered_context(repo.working_tree_dir, finding)
+    header = numbered_header(repo.working_tree_dir, finding.file)
 
     try:
-        model_output = ollama.generate(build_fix_prompt(finding, retry_feedback, context))
+        model_output = ollama.generate(
+            build_fix_prompt(finding, retry_feedback, context, header)
+        )
     except Exception as exc:
         # Spec: an Ollama call failure must never take the pipeline down —
         # log it and report the finding as unfixed so run_pipeline can skip

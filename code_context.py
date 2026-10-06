@@ -23,3 +23,29 @@ def numbered_context(target_repo: str, finding: Finding, radius: int = 15) -> st
     return "\n".join(
         f"{n:>{width}} | {lines[n - 1]}" for n in range(start, end + 1)
     )
+
+
+IMPORT_PREFIXES = ("import ", "from ")
+
+
+def numbered_header(target_repo: str, file: str, max_lines: int = 40) -> str:
+    """The file's import block, numbered like `numbered_context`.
+
+    The fix prompt asks for new imports next to the existing ones; without
+    seeing them the model guesses the import line, and an edit whose
+    ORIGINAL text is a guess never matches the file. Returns "" when the
+    file has no top-of-file imports or can't be read.
+    """
+    try:
+        with open(os.path.join(target_repo, file)) as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return ""
+    last = 0
+    for n, line in enumerate(lines[:max_lines], start=1):
+        if line.startswith(IMPORT_PREFIXES):
+            last = n
+    if not last:
+        return ""
+    width = len(str(last))
+    return "\n".join(f"{n:>{width}} | {lines[n - 1]}" for n in range(1, last + 1))

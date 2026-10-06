@@ -5,6 +5,7 @@ import sys
 import pyflakes.api
 import pyflakes.messages
 
+from fix_review import file_diff, review_fix
 from fixer import fix_finding, restore_file
 from models import Finding, FixResult, ValidationResult
 from scanner import scan
@@ -81,6 +82,12 @@ def new_code_errors(file: str, before: str | None, after: str | None) -> list[st
     return [p for p in problems(after) if p not in old]
 
 
+def tail(text: str, limit: int) -> str:
+    """The last `limit` chars: test failures are reported at the end of the
+    output, so a head-truncation shows only the session header."""
+    return text if len(text) <= limit else "…" + text[-limit:]
+
+
 def run_test_suite(target_repo: str) -> tuple[bool, str]:
     if not os.path.isdir(os.path.join(target_repo, "tests")):
         return True, "no tests found"
@@ -89,7 +96,9 @@ def run_test_suite(target_repo: str) -> tuple[bool, str]:
         # "tests", not os.path.join(target_repo, "tests") — cwd is already
         # target_repo, so a prefixed path would resolve to
         # target_repo/target_repo/tests.
-        [_pytest_for(target_repo), "tests", "-v"],
+        # -q --tb=short -rf: the failure summary is short and sits at the
+        # end, which is the part callers keep (see tail()).
+        [_pytest_for(target_repo), "tests", "-q", "--tb=short", "-rf"],
         capture_output=True,
         text=True,
         cwd=target_repo,
@@ -123,11 +132,11 @@ def _check(
         test_output = (
             f"The fix broke {finding.file}: " + "; ".join(broken) + "\n" + test_output
         )
-    remaining_lines = sorted(
-        f.line for f in rescanned
-        if f.rule_id == finding.rule_id and f.file == finding.file
+    remaining = sorted(
+        (f for f in rescanned if f.rule_id == finding.rule_id and f.file == finding.file),
+        key=lambda f: f.line,
     )
-    return still_present, tests_passed, test_output, remaining_lines
+    return still_present, tests_passed, test_output, remaining
 
 
 def build_feedback(
@@ -147,7 +156,7 @@ def build_feedback(
     else:
         parts.append("The rescan no longer flags the finding.")
     if not tests_passed:
-        parts.append(f"But the change breaks the code:\n{test_output[:2000]}")
+        parts.append(f"But the change breaks the code:\n{tail(test_output, 2000)}")
     return " ".join(parts)
 
 
@@ -160,6 +169,66 @@ def _progress(finding: Finding, attempt: int, still_present: bool, tests_passed:
     )
 
 
+SCANNER_STILL_FLAGS_NOTE = (
+    "scanner still flags this pattern, but re-triage of the fixed code (Laya and "
+    "the LLM agreeing) judged it safe — reviewer, please confirm"
+)
+
+
+def _assess(
+    finding: Finding,
+    target_repo: str,
+    baseline: str | None,
+    still_present: bool,
+    tests_passed: bool,
+    test_output: str,
+    remaining: list[Finding],
+    attempts: int,
+    ollama,
+    review: bool,
+    retriage,
+) -> ValidationResult | str:
+    """Accept the applied fix (-> ValidationResult) or say why not (-> feedback).
+
+    - rescan clean + tests pass -> accept, after the fix-quality review
+    - rescan still flags + tests pass -> accept only if re-triaging the FIXED
+      code makes Laya and the LLM both call it a false positive: some rules
+      (e.g. Flask open-redirect) flag every validation-based fix, so a
+      correct fix could otherwise never pass
+    - anything else -> feedback for the next attempt
+    """
+    if tests_passed and not still_present:
+        if review:
+            diff = file_diff(finding.file, baseline, _read(target_repo, finding.file))
+            approved, reason = review_fix(ollama, finding, diff)
+            print(f"    [fix review] {'APPROVE' if approved else 'REJECT'}: {reason[:150]}",
+                  file=sys.stderr, flush=True)
+            if not approved:
+                return (
+                    "The rescan is clean, but a security review rejected the fix: "
+                    f"{reason}. Produce a fix that follows current best practice."
+                )
+        return ValidationResult(
+            finding=finding, clean=True, test_output=test_output,
+            validated=True, attempts=attempts,
+        )
+
+    if tests_passed and still_present and retriage is not None and remaining:
+        nearest = min(remaining, key=lambda f: abs(f.line - finding.line))
+        verdict = retriage(nearest)
+        print(f"    [re-triage of fixed code] Laya {verdict.laya_score:.2f} -> {verdict.route}",
+              file=sys.stderr, flush=True)
+        if verdict.route == "reject":
+            return ValidationResult(
+                finding=finding, clean=False, test_output=test_output,
+                validated=True, attempts=attempts, note=SCANNER_STILL_FLAGS_NOTE,
+            )
+
+    return build_feedback(
+        finding, still_present, [f.line for f in remaining], tests_passed, test_output
+    )
+
+
 def validate_and_retry(
     fix_result: FixResult,
     ollama,
@@ -169,80 +238,55 @@ def validate_and_retry(
     max_retries: int,
     baseline_count: int | None = None,
     base_branch: str = "main",
+    review: bool = False,
+    retriage=None,
 ) -> ValidationResult:
-    """Rescan + test an already-applied fix; on failure, feed the result back
-    to the LLM for a new fix and rescan again, up to `max_retries` times.
+    """Validate an already-applied fix; on failure feed the reason back to the
+    LLM for a new fix, up to `max_retries` more attempts.
 
     `baseline_count` is how many (rule_id, file) matches the target repo was
     expected to hold immediately BEFORE this fix was applied — see
-    `finding_still_present`. Callers that know it (cli.run_pipeline tracks
-    it) should pass it, so that fixing one of several same-rule instances in
-    one file counts as progress instead of burning every retry.
+    `finding_still_present`. `review` turns on the fix-quality review;
+    `retriage(finding) -> TriageResult` enables accepting a fix the scanner
+    still flags (see `_assess`).
     """
     finding = fix_result.finding
     baseline = fix_result.baseline
+    current_fix = fix_result
     attempts = 1
-
-    def failure_reason(applied: bool, still_present: bool) -> str:
-        if not applied:
-            return "no usable fix"
-        return "still flagged" if still_present else "breaks code or tests"
-
-    if fix_result.applied:
-        # Validate the fix that was already applied before this call,
-        # before spending any retries on it.
-        still_present, tests_passed, test_output, remaining_lines = _check(
-            target_repo, semgrep_rulesets, finding, baseline_count, baseline
-        )
-        _progress(finding, attempts, still_present, tests_passed)
-        if not still_present and tests_passed:
-            return ValidationResult(
-                finding=finding, clean=True, test_output=test_output,
-                validated=True, attempts=attempts,
-            )
-        feedback = build_feedback(
-            finding, still_present, remaining_lines, tests_passed, test_output
-        )
-    else:
-        # The first reply was unusable (no edit blocks, or they didn't match
-        # the file). That's a failed attempt like any other: retry with the
-        # specific reason rather than giving up on a confirmed finding.
-        print(f"    [fix attempt {attempts}] {fix_result.error[:120]}", file=sys.stderr, flush=True)
-        still_present, tests_passed, test_output = True, True, fix_result.error
-        feedback = fix_result.error
-    last_applied = fix_result.applied
     last_proposal = fix_result.diff
+    still_present = True
 
-    for _ in range(max_retries):
+    while True:
+        if not current_fix.applied:
+            # An unusable reply (no edit blocks, or they didn't match the
+            # file) is a failed attempt like any other: retry with the reason.
+            print(f"    [fix attempt {attempts}] {current_fix.error[:120]}", file=sys.stderr, flush=True)
+            still_present, test_output = True, current_fix.error
+            feedback = current_fix.error
+        else:
+            # Every attempt gets validated, including the last one.
+            still_present, tests_passed, test_output, remaining = _check(
+                target_repo, semgrep_rulesets, finding, baseline_count, baseline
+            )
+            _progress(finding, attempts, still_present, tests_passed)
+            outcome = _assess(
+                finding, target_repo, baseline, still_present, tests_passed,
+                test_output, remaining, attempts, ollama, review, retriage,
+            )
+            if isinstance(outcome, ValidationResult):
+                return outcome
+            feedback = outcome
+            if "security review rejected" in feedback:
+                test_output = feedback
+
+        if attempts > max_retries:
+            break
         current_fix = fix_finding(
             finding, ollama, repo, retry_feedback=feedback, baseline=baseline
         )
         attempts += 1
-        last_applied = current_fix.applied
         last_proposal = current_fix.diff or last_proposal
-
-        if not current_fix.applied:
-            print(f"    [fix attempt {attempts}] {current_fix.error[:120]}", file=sys.stderr, flush=True)
-            still_present, test_output = True, current_fix.error
-            feedback = current_fix.error
-            continue
-
-        # Every retry attempt gets validated, including the last one — a
-        # fix that lands on the final retry must not be reverted just
-        # because retries ran out before it could be checked.
-        still_present, tests_passed, test_output, remaining_lines = _check(
-            target_repo, semgrep_rulesets, finding, baseline_count, baseline
-        )
-        _progress(finding, attempts, still_present, tests_passed)
-
-        if not still_present and tests_passed:
-            return ValidationResult(
-                finding=finding, clean=True, test_output=test_output,
-                validated=True, attempts=attempts,
-            )
-        feedback = build_feedback(
-            finding, still_present, remaining_lines, tests_passed, test_output
-        )
 
     # The rejected fix's edits are still sitting uncommitted in the working
     # tree (fix branches never commit — see fixer.fix_finding). Undo just
@@ -252,9 +296,14 @@ def validate_and_retry(
     # earlier validated-but-uncommitted fix in the SAME file survives.
     restore_file(repo, finding.file, baseline)
     repo.git.checkout(base_branch)
+    if not current_fix.applied:
+        failure = "no usable fix"
+    elif still_present:
+        failure = "still flagged"
+    else:
+        failure = "breaks code or tests"
     return ValidationResult(
         finding=finding, clean=False, test_output=test_output,
-        validated=False, attempts=attempts,
-        failure=failure_reason(last_applied, still_present),
+        validated=False, attempts=attempts, failure=failure,
         last_proposal=last_proposal,
     )

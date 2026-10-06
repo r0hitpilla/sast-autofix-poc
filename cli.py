@@ -58,8 +58,18 @@ def triage_all(findings, target_repo, cfg, ollama, laya):
     """Triage every finding against the UNMODIFIED repo, before any fix lands —
     later fixes shift line numbers, which would skew the code context."""
     results = []
+    by_location = {}
     for n, f in enumerate(findings, start=1):
         print(f"[triage {n}/{len(findings)}] {f.file}:{f.line} {f.cwe}", file=sys.stderr, flush=True)
+        earlier = by_location.get((f.file, f.line))
+        if earlier is not None:
+            # Several rules often flag the same line (three XSS rules on one
+            # f-string). It's the same code, so it gets the same verdict:
+            # investigating it again only costs minutes of LLM time.
+            print(f"    same code as an earlier finding -> {earlier.route} (verdict reused)",
+                  file=sys.stderr, flush=True)
+            results.append(dataclasses.replace(earlier, finding=f))
+            continue
         result = triage_finding(
             f, ollama, laya, cfg.threshold_fix, cfg.threshold_review,
             max_rounds=cfg.triage_max_rounds,
@@ -72,7 +82,24 @@ def triage_all(findings, target_repo, cfg, ollama, laya):
             file=sys.stderr, flush=True,
         )
         results.append(result)
+        by_location[(f.file, f.line)] = result
     return results
+
+
+def with_all_rules(finding, findings):
+    """`finding`, with the message listing every rule flagged on its line, so
+    one fix addresses all of them instead of satisfying one rule at a time."""
+    others = [
+        f for f in findings
+        if (f.file, f.line) == (finding.file, finding.line) and f.rule_id != finding.rule_id
+    ]
+    if not others:
+        return finding
+    extra = "\n".join(f"- {f.rule_id}: {f.message}" for f in others)
+    return dataclasses.replace(
+        finding,
+        message=f"{finding.message}\nThe same line is also flagged by:\n{extra}",
+    )
 
 
 PROTECTED_PREFIXES = (".github/",)
@@ -83,7 +110,10 @@ def fix_branch_residual(report: RunReport) -> list:
     ones Laya rejected as false positives — those never block anything."""
     rejected = {
         (r.triage.finding.rule_id, r.triage.finding.file)
-        for r in report.records if r.triage.route == "reject"
+        for r in report.records
+        if r.triage.route == "reject"
+        # fixed code the scanner still matches, but triage judged safe
+        or (r.validation is not None and r.validation.validated and r.validation.note)
     }
     return [f for f in report.residual if (f.rule_id, f.file) not in rejected]
 
@@ -139,12 +169,14 @@ def run_pipeline(
     # ones that made it into the PR.
     outcomes = {
         "fixed and validated": 0,
+        "fixed (scanner still flags; triage judged safe)": 0,
         "sent to review": 0,
         "sent to review (CI/workflow file, never auto-fixed)": 0,
         "rejected (likely false positive)": 0,
         "confirmed (check only, not fixed)": 0,
         "skipped (file not found in target repo)": 0,
         "resolved by an earlier fix": 0,
+        "not fixed (same code as a failed fix)": 0,
         "no usable fix from the llm": 0,
         "fix applied but failed validation": 0,
     }
@@ -182,6 +214,7 @@ def run_pipeline(
         return report
 
     entries = []
+    failed_at = {}  # (file, line) -> ValidationResult of a fix that never validated
     for triage_result in triage_results:
         finding = triage_result.finding
         if triage_result.route == "review":
@@ -226,21 +259,39 @@ def run_pipeline(
                 record(triage_result, "resolved by an earlier fix")
                 continue
 
+        if (finding.file, finding.line) in failed_at:
+            # Every retry on this exact code already failed; the next rule on
+            # the same line would just repeat those attempts.
+            record(triage_result, "not fixed (same code as a failed fix)",
+                   failed_at[(finding.file, finding.line)])
+            continue
+
         with timed(timings, "fix + rescan loop"):
-            fix_result = fix_finding(finding, ollama, repo)
+            fix_result = fix_finding(with_all_rules(finding, findings), ollama, repo)
             validation_result = validate_and_retry(
                 fix_result, ollama, repo, target_repo,
                 cfg.semgrep_rulesets, cfg.max_fix_retries,
                 baseline_count=remaining[rule_file_key],
                 base_branch=base_branch,
+                review=cfg.fix_review,
+                retriage=lambda f: triage_finding(
+                    f, ollama, laya, cfg.threshold_fix, cfg.threshold_review,
+                    max_rounds=cfg.triage_max_rounds,
+                    context=numbered_context(target_repo, f),
+                ),
             )
         entries.append((triage_result, validation_result))
-        if validation_result.validated:
+        if validation_result.validated and validation_result.note:
+            # The scanner still matches here, so the count doesn't drop.
+            record(triage_result, "fixed (scanner still flags; triage judged safe)", validation_result)
+        elif validation_result.validated:
             remaining[rule_file_key] -= 1
             record(triage_result, "fixed and validated", validation_result)
         elif validation_result.failure == "no usable fix":
+            failed_at[(finding.file, finding.line)] = validation_result
             record(triage_result, "no usable fix from the llm", validation_result)
         else:
+            failed_at[(finding.file, finding.line)] = validation_result
             record(triage_result, "fix applied but failed validation", validation_result)
 
     print(f"\nScanned: {len(findings)} findings.")
@@ -260,7 +311,7 @@ def run_pipeline(
     unresolved = [
         r for r in report.records
         if r.triage.route in ("fix", "review") and not (r.validation and r.validation.validated)
-        and r.outcome != "resolved by an earlier fix"
+        and r.outcome not in ("resolved by an earlier fix", "not fixed (same code as a failed fix)")
     ]
     if not validated:
         # No code change means no branch to open a PR from; the findings and

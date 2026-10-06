@@ -366,3 +366,27 @@ def test_fix_branch_gets_a_status_from_the_final_rescan(tmp_path, monkeypatch):
     # Only a rejected false positive is left on SV-fix -> it passes.
     assert kwargs["state"] == "success"
     assert kwargs["target_url"].endswith("/actions/runs/42")
+
+
+def test_same_line_is_triaged_and_fixed_once(tmp_path, capsys):
+    a = Finding(file="app.py", line=41, rule_id="xss.one", cwe="CWE-79", message="m1", snippet="s")
+    b = Finding(file="app.py", line=41, rule_id="xss.two", cwe="CWE-79", message="m2", snippet="s")
+    triage_result = TriageResult(finding=a, llm_reasoning="r", laya_score=0.9, route="fix")
+    failed = ValidationResult(finding=a, clean=False, test_output="t", validated=False,
+                              attempts=4, failure="still flagged")
+
+    with patch("cli.load_config", return_value=MagicMock()), \
+         patch("cli.scan", return_value=[a, b]), \
+         patch("cli.OllamaClient"), \
+         patch("cli.LayaClient"), \
+         patch("cli.git.Repo", return_value=MagicMock()), \
+         patch("cli.triage_finding", return_value=triage_result) as mock_triage, \
+         patch("cli.fix_finding", return_value=FixResult(a, "d", True, "b")) as mock_fix, \
+         patch("cli.validate_and_retry", return_value=failed):
+        run_pipeline(make_target_repo(tmp_path), "config.yaml", dry_run=True, base_branch="SV2")
+
+    assert mock_triage.call_count == 1       # verdict reused for the second rule
+    assert mock_fix.call_count == 1          # no second round of attempts
+    # ...and the one fix was told about both rules on that line.
+    assert "xss.two" in mock_fix.call_args.args[0].message
+    assert "not fixed (same code as a failed fix): 1" in capsys.readouterr().out.lower()

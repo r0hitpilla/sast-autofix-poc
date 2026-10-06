@@ -49,6 +49,9 @@ class ValidationResult:
     # The last fix the LLM proposed when none validated, shown to the
     # developer as an unverified suggestion.
     last_proposal: str = ""
+    # Set when the fix was accepted with a caveat a reviewer should see,
+    # e.g. the scanner still matches the pattern but triage judged it safe.
+    note: str = ""
 
 
 @dataclass
