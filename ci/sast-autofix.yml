@@ -1,5 +1,10 @@
 # Copy to .github/workflows/sast-autofix.yml in the repo to protect.
 #
+# Flow: a developer pushes branch SV -> this scans the whole repo as it is on
+# SV -> validated fixes are pushed to SV-fix -> PR "SV-fix -> SV" lists every
+# changed line plus suggestions for what couldn't be auto-fixed. The developer
+# merges that into SV, then SV into main as usual.
+#
 # Runs on a self-hosted runner on the DGX Spark: Ollama, Laya and Semgrep are
 # local there, and no code or findings leave the machine except the fix PR.
 # Deliberately NOT triggered by pull_request — on a public repo that would let
@@ -8,16 +13,20 @@ name: SAST Autofix
 
 on:
   push:
-    branches: [main]
+    branches-ignore:
+      - main        # scan developer branches before they reach main
+      - "**-fix"    # never scan the fix branches this workflow pushes
   workflow_dispatch:
 
 permissions:
-  contents: write        # push the autofix/run-<id> branch
+  contents: write        # push the <branch>-fix branch
   pull-requests: write   # open the PR and its inline line comments
 
 concurrency:
-  group: sast-autofix
-  cancel-in-progress: false
+  # One scan per developer branch at a time; a newer push to the same branch
+  # supersedes a scan still running on the old commit.
+  group: sast-autofix-${{ github.ref_name }}
+  cancel-in-progress: true
 
 jobs:
   autofix:
@@ -52,8 +61,8 @@ jobs:
           "$SAST_AUTOFIX_HOME/venv/bin/python" "$SAST_AUTOFIX_HOME/cli.py" \
             --config "$SAST_AUTOFIX_HOME/config.yaml" \
             run --target-repo "$GITHUB_WORKSPACE" \
-            --report-dir "$RUNNER_TEMP/sast-autofix" \
-            --skip-if-open-pr
+            --base-branch "$GITHUB_REF_NAME" \
+            --report-dir "$RUNNER_TEMP/sast-autofix"
 
       - name: Upload run report
         if: always()

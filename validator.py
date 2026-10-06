@@ -168,6 +168,7 @@ def validate_and_retry(
     semgrep_rulesets: list[str],
     max_retries: int,
     baseline_count: int | None = None,
+    base_branch: str = "main",
 ) -> ValidationResult:
     """Rescan + test an already-applied fix; on failure, feed the result back
     to the LLM for a new fix and rescan again, up to `max_retries` times.
@@ -210,6 +211,7 @@ def validate_and_retry(
         still_present, tests_passed, test_output = True, True, fix_result.error
         feedback = fix_result.error
     last_applied = fix_result.applied
+    last_proposal = fix_result.diff
 
     for _ in range(max_retries):
         current_fix = fix_finding(
@@ -217,6 +219,7 @@ def validate_and_retry(
         )
         attempts += 1
         last_applied = current_fix.applied
+        last_proposal = current_fix.diff or last_proposal
 
         if not current_fix.applied:
             print(f"    [fix attempt {attempts}] {current_fix.error[:120]}", file=sys.stderr, flush=True)
@@ -248,9 +251,10 @@ def validate_and_retry(
     # restore_file rewinds to the pre-fix snapshot rather than HEAD, so any
     # earlier validated-but-uncommitted fix in the SAME file survives.
     restore_file(repo, finding.file, baseline)
-    repo.git.checkout("main")
+    repo.git.checkout(base_branch)
     return ValidationResult(
         finding=finding, clean=False, test_output=test_output,
         validated=False, attempts=attempts,
         failure=failure_reason(last_applied, still_present),
+        last_proposal=last_proposal,
     )

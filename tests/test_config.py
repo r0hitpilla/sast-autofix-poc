@@ -22,8 +22,6 @@ def config_file(tmp_path):
           rulesets:
             - p/security-audit
             - p/owasp-top-ten
-        pr:
-          strategy: single
         max_fix_retries: 2
         """))
     return str(path)
@@ -37,7 +35,6 @@ def test_load_config_reads_all_fields(config_file):
     assert cfg.threshold_fix == 0.8
     assert cfg.threshold_review == 0.4
     assert cfg.semgrep_rulesets == ["p/security-audit", "p/owasp-top-ten"]
-    assert cfg.pr_strategy == "single"
     assert cfg.max_fix_retries == 2
 
 

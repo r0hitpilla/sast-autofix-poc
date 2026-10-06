@@ -19,8 +19,7 @@ from pr import (
     build_line_comments,
     build_pr_body,
     commit_validated_findings,
-    open_autofix_prs,
-    open_pr,
+    open_or_update_pr,
 )
 from report import FindingRecord, RunReport, write_report
 from scanner import scan
@@ -92,28 +91,30 @@ def run_pipeline(
     config_path: str,
     dry_run: bool,
     report_dir: str = "reports",
-    skip_if_open_pr: bool = False,
+    base_branch: str | None = None,
+    fix_branch: str | None = None,
 ):
+    """Scan the developer's branch (`base_branch`, e.g. SV) as a whole repo
+    and propose fixes on `fix_branch` (default "<base>-fix") via a PR into
+    the developer's branch — never into main directly."""
     cfg = load_config(config_path)
     repo_full_name = os.environ.get("GITHUB_REPO", "r0hitpilla/sast-poc-vuln-app")
     github_client = None if dry_run else Github(os.environ["GITHUB_TOKEN"])
 
-    if skip_if_open_pr and github_client is not None:
-        already_open = open_autofix_prs(github_client, repo_full_name)
-        if already_open:
-            # Automation runs on every push to main; stacking a second fix
-            # PR on top of an unreviewed one only buries the first.
-            print("Autofix PR(s) still open, skipping this run:", *already_open)
-            return
+    repo = git.Repo(target_repo)
+    if base_branch:
+        repo.git.checkout(base_branch)
+    else:
+        base_branch = repo.active_branch.name
+    fix_branch = fix_branch or f"{base_branch}-fix"
 
-    report = RunReport(target=repo_full_name if not dry_run else target_repo)
+    report = RunReport(target=f"{repo_full_name if not dry_run else target_repo} @ {base_branch}")
     timings = report.timings
 
     with timed(timings, "scan"):
         findings = scan(target_repo, cfg.semgrep_rulesets)
     ollama = OllamaClient(host=cfg.ollama_host, model=cfg.ollama_model)
     laya = LayaClient(model=cfg.laya_model)
-    repo = git.Repo(target_repo)
 
     # Every finding ends up in exactly one of these buckets — a human reading
     # the run output must be able to account for all of them, not just the
@@ -197,6 +198,7 @@ def run_pipeline(
                 fix_result, ollama, repo, target_repo,
                 cfg.semgrep_rulesets, cfg.max_fix_retries,
                 baseline_count=remaining[rule_file_key],
+                base_branch=base_branch,
             )
         entries.append((triage_result, validation_result))
         if validation_result.validated:
@@ -221,48 +223,53 @@ def run_pipeline(
         print(f"  - {f.file}:{f.line} {f.cwe} ({f.rule_id})")
 
     validated = [(t, v) for t, v in entries if v.validated]
+    unresolved = [
+        r for r in report.records
+        if r.triage.route in ("fix", "review") and not (r.validation and r.validation.validated)
+        and r.outcome != "resolved by an earlier fix"
+    ]
     if not validated:
+        # No code change means no branch to open a PR from; the findings and
+        # suggestions still land in the run report / job summary.
         print("No findings validated for a fix.")
+        if unresolved:
+            print(f"{len(unresolved)} confirmed finding(s) need a developer — see the report.")
         print("Report:", write_report(report, report_dir))
         return
 
-    branches = commit_validated_findings(repo, entries, cfg.pr_strategy)
-    # "single" strategy returns the same branch repeated once per validated
-    # finding; "per-finding" returns N distinct branches. Dedupe (preserving
-    # order) so every distinct branch gets pushed and gets its own PR —
-    # branches[0] alone would silently drop findings 2..N under per-finding.
-    unique_branches = list(dict.fromkeys(branches))
+    commit_validated_findings(repo, entries, fix_branch)
 
-    # Built per branch from the branch's real diff against main, so the line
-    # numbers in the body and the inline comments are the ones GitHub shows.
-    prs = []
-    for branch in unique_branches:
-        hunks = branch_hunks(repo, "main", branch)
-        body = build_pr_body(entries, hunks, repo_full_name, branch)
-        prs.append((branch, body, build_line_comments(entries, hunks)))
+    # Built from the fix branch's real diff against the developer's branch,
+    # so the line numbers in the body and the inline comments are exactly
+    # the ones GitHub shows on the PR.
+    hunks = branch_hunks(repo, base_branch, fix_branch)
+    body = build_pr_body(
+        entries, hunks, repo_full_name, fix_branch, base=base_branch, unresolved=unresolved,
+    )
+    comments = build_line_comments(entries, hunks)
+    title = f"Security fixes for {base_branch} (sast-autofix)"
 
     if dry_run:
-        for branch, body, comments in prs:
-            print(f"[dry-run] Would push branch: {branch}")
-            print("[dry-run] PR body:\n", body)
-            print(f"[dry-run] Inline line comments ({len(comments)}):")
-            for c in comments:
-                lines = f"L{c['start_line']}-L{c['line']}" if "start_line" in c else f"L{c['line']}"
-                print(f"  {c['path']} {lines} ({c['side']}): {c['body'].splitlines()[0]}")
+        print(f"[dry-run] Would push {fix_branch} and open/update PR {fix_branch} -> {base_branch}")
+        print("[dry-run] PR body:\n", body)
+        print(f"[dry-run] Inline line comments ({len(comments)}):")
+        for c in comments:
+            lines = f"L{c['start_line']}-L{c['line']}" if "start_line" in c else f"L{c['line']}"
+            print(f"  {c['path']} {lines} ({c['side']}): {c['body'].splitlines()[0]}")
         # Leave the local repo where we found it; the commit stays on its branch.
-        repo.git.checkout("main")
+        repo.git.checkout(base_branch)
         print("Report:", write_report(report, report_dir))
         return
 
-    for branch, body, comments in prs:
-        repo.git.push("--set-upstream", "origin", branch)
-        url = open_pr(
-            github_client, repo_full_name, branch,
-            title="Automated security fixes (sast-autofix-poc)",
-            body=body, dry_run=dry_run, line_comments=comments,
-        )
-        report.pr_urls.append(url)
-        print(f"Opened PR: {url}")
+    # --force: SV-fix is owned by this tool and rebuilt from the latest SV on
+    # every scan; a previous run's version of it is meant to be replaced.
+    repo.git.push("--force", "origin", f"{fix_branch}:{fix_branch}")
+    url = open_or_update_pr(
+        github_client, repo_full_name, head=fix_branch, base=base_branch,
+        title=title, body=body, line_comments=comments,
+    )
+    report.pr_urls.append(url)
+    print(f"PR: {url}")
     print("Report:", write_report(report, report_dir))
 
 
@@ -283,11 +290,13 @@ def cmd_fix(args):
 
 
 def cmd_pr(args):
-    run_pipeline(args.target_repo, args.config, args.dry_run, args.report_dir, args.skip_if_open_pr)
+    run_pipeline(args.target_repo, args.config, args.dry_run, args.report_dir,
+                 args.base_branch, args.fix_branch)
 
 
 def cmd_run(args):
-    run_pipeline(args.target_repo, args.config, args.dry_run, args.report_dir, args.skip_if_open_pr)
+    run_pipeline(args.target_repo, args.config, args.dry_run, args.report_dir,
+                 args.base_branch, args.fix_branch)
 
 
 def build_parser():
@@ -312,8 +321,10 @@ def build_parser():
     pr_parser.add_argument("--dry-run", action="store_true", default=False)
     pr_parser.add_argument("--report-dir", default="reports",
                            help="where to write sast-autofix-report.md/.json")
-    pr_parser.add_argument("--skip-if-open-pr", action="store_true", default=False,
-                           help="do nothing while an autofix/* PR is still open (for CI)")
+    pr_parser.add_argument("--base-branch", default=None,
+                           help="developer branch to scan, e.g. SV (default: current branch)")
+    pr_parser.add_argument("--fix-branch", default=None,
+                           help="branch to push fixes to (default: <base-branch>-fix)")
     pr_parser.set_defaults(func=cmd_pr)
 
     run_parser = sub.add_parser("run", help="Full pipeline: scan -> triage -> fix -> validate -> pr")
@@ -321,8 +332,10 @@ def build_parser():
     run_parser.add_argument("--dry-run", action="store_true", default=False)
     run_parser.add_argument("--report-dir", default="reports",
                            help="where to write sast-autofix-report.md/.json")
-    run_parser.add_argument("--skip-if-open-pr", action="store_true", default=False,
-                           help="do nothing while an autofix/* PR is still open (for CI)")
+    run_parser.add_argument("--base-branch", default=None,
+                           help="developer branch to scan, e.g. SV (default: current branch)")
+    run_parser.add_argument("--fix-branch", default=None,
+                           help="branch to push fixes to (default: <base-branch>-fix)")
     run_parser.set_defaults(func=cmd_run)
 
     return parser

@@ -46,6 +46,9 @@ class ValidationResult:
     # Why the last attempt failed: "" when validated, else one of
     # "no usable fix" | "still flagged" | "breaks code or tests".
     failure: str = ""
+    # The last fix the LLM proposed when none validated, shown to the
+    # developer as an unverified suggestion.
+    last_proposal: str = ""
 
 
 @dataclass

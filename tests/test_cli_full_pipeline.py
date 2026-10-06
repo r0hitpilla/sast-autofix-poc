@@ -74,7 +74,7 @@ def test_run_pipeline_dry_run_never_reads_github_token(tmp_path, monkeypatch):
          patch("cli.triage_finding", return_value=triage_result), \
          patch("cli.fix_finding", return_value=fix_result), \
          patch("cli.validate_and_retry", return_value=validation_result), \
-         patch("cli.commit_validated_findings", return_value=["autofix/x"]), \
+         patch("cli.commit_validated_findings", return_value="main-fix"), \
          patch("cli.build_pr_body", return_value="pr body"):
 
         run_pipeline(make_target_repo(tmp_path), "config.yaml", dry_run=True)
@@ -134,7 +134,7 @@ def test_run_pipeline_passes_a_baseline_count_that_tracks_validated_fixes(tmp_pa
          patch("cli.triage_finding", return_value=triage_result), \
          patch("cli.fix_finding", return_value=fix_result), \
          patch("cli.validate_and_retry", return_value=validation_result) as mock_validate, \
-         patch("cli.commit_validated_findings", return_value=["autofix/x"]), \
+         patch("cli.commit_validated_findings", return_value="main-fix"), \
          patch("cli.build_pr_body", return_value="pr body"):
 
         run_pipeline(make_target_repo(tmp_path), "config.yaml", dry_run=True)
@@ -184,7 +184,7 @@ def test_run_pipeline_summarises_every_finding_outcome(tmp_path, capsys):
          patch("cli.triage_finding", side_effect=fake_triage), \
          patch("cli.fix_finding", side_effect=fake_fix), \
          patch("cli.validate_and_retry", side_effect=fake_validate), \
-         patch("cli.commit_validated_findings", return_value=["autofix/x"]), \
+         patch("cli.commit_validated_findings", return_value="main-fix"), \
          patch("cli.build_pr_body", return_value="pr body"):
 
         run_pipeline(make_target_repo(tmp_path), "config.yaml", dry_run=True)
@@ -195,18 +195,6 @@ def test_run_pipeline_summarises_every_finding_outcome(tmp_path, capsys):
     assert "sent to review: 1" in out
     assert "rejected (likely false positive): 1" in out
     assert "no usable fix from the llm: 1" in out
-
-
-def test_run_pipeline_skips_entirely_while_an_autofix_pr_is_open(tmp_path, monkeypatch, capsys):
-    monkeypatch.setenv("GITHUB_TOKEN", "t")
-    with patch("cli.load_config", return_value=MagicMock()), \
-         patch("cli.Github"), \
-         patch("cli.open_autofix_prs", return_value=["https://github.com/o/r/pull/7"]), \
-         patch("cli.scan") as mock_scan:
-        run_pipeline(make_target_repo(tmp_path), "config.yaml", dry_run=False, skip_if_open_pr=True)
-
-    mock_scan.assert_not_called()
-    assert "pull/7" in capsys.readouterr().out
 
 
 def test_run_pipeline_writes_report_and_job_summary(tmp_path, monkeypatch):
@@ -229,7 +217,7 @@ def test_run_pipeline_writes_report_and_job_summary(tmp_path, monkeypatch):
          patch("cli.triage_finding", return_value=triage_result), \
          patch("cli.fix_finding", return_value=FixResult(finding, "d", True, "b")), \
          patch("cli.validate_and_retry", return_value=validation_result), \
-         patch("cli.commit_validated_findings", return_value=["autofix/run-1"]), \
+         patch("cli.commit_validated_findings", return_value="main-fix"), \
          patch("cli.branch_hunks", return_value=[]):
         run_pipeline(make_target_repo(tmp_path), "config.yaml", dry_run=True,
                      report_dir=str(tmp_path / "out"))
@@ -258,3 +246,35 @@ def test_run_pipeline_never_auto_fixes_workflow_files(tmp_path, capsys):
 
     mock_fix_finding.assert_not_called()
     assert "ci/workflow file, never auto-fixed): 1" in capsys.readouterr().out.lower()
+
+
+def test_run_pipeline_scans_developer_branch_and_targets_its_fix_branch(tmp_path, monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "t")
+    finding = make_finding()
+    triage_result = TriageResult(finding=finding, llm_reasoning="r", laya_score=0.95, route="fix")
+    validation_result = ValidationResult(
+        finding=finding, clean=True, test_output="no tests found", validated=True,
+    )
+    mock_repo = MagicMock()
+
+    with patch("cli.load_config", return_value=MagicMock()), \
+         patch("cli.Github"), \
+         patch("cli.scan", return_value=[finding]), \
+         patch("cli.OllamaClient"), \
+         patch("cli.LayaClient"), \
+         patch("cli.git.Repo", return_value=mock_repo), \
+         patch("cli.triage_finding", return_value=triage_result), \
+         patch("cli.fix_finding", return_value=FixResult(finding, "d", True, "b")), \
+         patch("cli.validate_and_retry", return_value=validation_result) as mock_validate, \
+         patch("cli.commit_validated_findings", return_value="SV-fix") as mock_commit, \
+         patch("cli.branch_hunks", return_value=[]) as mock_hunks, \
+         patch("cli.open_or_update_pr", return_value="https://github.com/o/r/pull/5") as mock_pr:
+        run_pipeline(make_target_repo(tmp_path), "config.yaml", dry_run=False, base_branch="SV")
+
+    mock_repo.git.checkout.assert_any_call("SV")
+    assert mock_validate.call_args.kwargs["base_branch"] == "SV"
+    assert mock_commit.call_args.args[2] == "SV-fix"
+    mock_hunks.assert_called_once_with(mock_repo, "SV", "SV-fix")
+    mock_repo.git.push.assert_called_once_with("--force", "origin", "SV-fix:SV-fix")
+    assert mock_pr.call_args.kwargs["head"] == "SV-fix"
+    assert mock_pr.call_args.kwargs["base"] == "SV"

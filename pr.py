@@ -1,12 +1,10 @@
-import os
 import sys
-from datetime import datetime
 
 from git.exc import GitCommandError
 
 from diff_utils import format_range
-from git_utils import checkout_branch
 from models import Hunk, TriageResult, ValidationResult
+from triage import summarize_answer
 
 
 def assign_hunks(
@@ -75,19 +73,63 @@ def _validation_note(validation: ValidationResult) -> str:
     return note
 
 
+def build_suggestions(unresolved) -> str:
+    """Findings this run could not fix automatically, with what the LLM
+    found and (where it tried) its last, unverified fix proposal.
+    `unresolved` holds report.FindingRecord-like objects."""
+    if not unresolved:
+        return ""
+    parts = [
+        "## ⚠️ Findings not fixed automatically — suggestions\n",
+        "These need a developer's decision before merging. The proposed "
+        "changes below were **not** validated; treat them as starting points.\n",
+    ]
+    for n, record in enumerate(unresolved, start=1):
+        triage, validation = record.triage, record.validation
+        finding = triage.finding
+        analysis = summarize_answer(triage.evidence[-1][1]) if triage.evidence else ""
+        parts.append(
+            f"### {n}. `{finding.file}:{finding.line}` — {finding.cwe}\n\n"
+            f"**Status:** {record.outcome} · Laya {triage.laya_score:.2f}"
+            + (f" · {validation.attempts} fix attempt(s)" if validation else "")
+            + "\n\n"
+            f"**Flagged code:**\n```\n{finding.snippet}\n```\n\n"
+            + (f"**Analysis:** {analysis}\n\n" if analysis else "")
+            + (
+                f"**Why the auto-fix was rejected:** {validation.test_output[:400]}\n\n"
+                if validation and not validation.validated else ""
+            )
+            + (
+                "<details><summary>Last proposed fix (unverified)</summary>\n\n"
+                f"```\n{validation.last_proposal[:3000]}\n```\n\n</details>\n"
+                if validation and validation.last_proposal else ""
+            )
+        )
+    return "\n".join(parts)
+
+
 def build_pr_body(
     entries: list[tuple[TriageResult, ValidationResult]],
     hunks: list[Hunk] | None = None,
     repo_full_name: str | None = None,
     branch: str | None = None,
+    base: str | None = None,
+    unresolved=None,
 ) -> str:
     validated_entries = [(t, v) for t, v in entries if v.validated]
+    suggestions = build_suggestions(unresolved)
     if not validated_entries:
-        return "No validated findings in this run."
+        return suggestions or "No validated findings in this run."
 
     per_entry, unassigned = assign_hunks(validated_entries, hunks or [])
 
     sections = ["## Automated security fixes\n"]
+    if base and branch:
+        sections.append(
+            f"Security scan of the whole repository on `{base}`. Merge this PR "
+            f"(`{branch}` → `{base}`) to take the validated fixes below, then "
+            f"merge `{base}` to `main` as usual.\n"
+        )
 
     if hunks is not None:
         sections.append(
@@ -143,6 +185,9 @@ def build_pr_body(
             )
         )
 
+    if suggestions:
+        sections.append(suggestions)
+
     return "\n".join(sections)
 
 
@@ -194,11 +239,6 @@ def build_line_comments(
     return comments
 
 
-def run_id() -> str:
-    """A per-run identifier: the Actions run id in CI, a timestamp locally."""
-    return os.environ.get("GITHUB_RUN_ID") or datetime.now().strftime("%Y%m%d-%H%M%S")
-
-
 BOT_IDENTITY = {
     "GIT_AUTHOR_NAME": "sast-autofix[bot]",
     "GIT_AUTHOR_EMAIL": "sast-autofix@users.noreply.github.com",
@@ -219,55 +259,40 @@ def _commit(repo, message: str) -> None:
             repo.git.commit("-m", message)
 
 
-def commit_validated_findings(repo, entries, strategy: str, run: str | None = None) -> list[str]:
+def commit_validated_findings(repo, entries, fix_branch: str) -> str:
+    """Commit every validated fix onto `fix_branch`, (re)created from the
+    branch currently checked out (the developer's branch, e.g. SV).
+
+    `-B` resets the branch if it already exists: SV-fix is regenerated from
+    the latest SV on every scan, never stacked on a stale previous run.
+    """
     validated_entries = [(t, v) for t, v in entries if v.validated]
-    branches = []
-
-    if strategy == "single":
-        # Unique per run: a fixed name makes every run after the first fail
-        # to push (non-fast-forward against the previous run's branch).
-        branch = f"autofix/run-{run or run_id()}"
-        checkout_branch(repo, branch)
-        for triage, _ in validated_entries:
-            repo.git.add(triage.finding.file)
-        _commit(repo, "fix: automated security fixes from sast-autofix-poc")
-        branches = [branch] * len(validated_entries)
-    else:  # per-finding
-        seen = {}
-        for triage, _ in validated_entries:
-            finding = triage.finding
-            file_slug = finding.file.rsplit("/", 1)[-1].replace(".", "-")
-            base = f"autofix/{finding.rule_id.replace('.', '-')}-{file_slug}-L{finding.line}"
-            # Same rule_id+file+line can recur (re-triaged finding, or two
-            # closely related findings at the same line) — disambiguate
-            # deterministically with an occurrence-index suffix so branch
-            # names never collide within a batch.
-            count = seen.get(base, 0)
-            seen[base] = count + 1
-            branch = base if count == 0 else f"{base}-{count}"
-
-            checkout_branch(repo, branch)
-            repo.git.add(finding.file)
-            _commit(repo, f"fix: {finding.cwe} at {finding.file}:{finding.line}")
-            branches.append(branch)
-
-    return branches
+    repo.git.checkout("-B", fix_branch)
+    for file in dict.fromkeys(t.finding.file for t, _ in validated_entries):
+        repo.git.add(file)
+    _commit(repo, "fix: automated security fixes from sast-autofix-poc")
+    return fix_branch
 
 
-def open_pr(
+def open_or_update_pr(
     github_client,
     repo_full_name: str,
-    branch: str,
+    head: str,
+    base: str,
     title: str,
     body: str,
-    dry_run: bool,
     line_comments: list[dict] | None = None,
-):
-    if dry_run:
-        return None
-
+) -> str:
+    """One PR per developer branch: head SV-fix -> base SV. A re-scan after
+    another push to SV updates that PR instead of opening a new one."""
     repo = github_client.get_repo(repo_full_name)
-    pull = repo.create_pull(title=title, body=body, head=branch, base="main")
+    owner = repo_full_name.split("/")[0]
+    existing = list(repo.get_pulls(state="open", head=f"{owner}:{head}", base=base))
+    if existing:
+        pull = existing[0]
+        pull.edit(title=title, body=body)
+    else:
+        pull = repo.create_pull(title=title, body=body, head=head, base=base)
 
     if line_comments:
         try:
@@ -283,12 +308,3 @@ def open_pr(
             print(f"[pr warning: inline line comments failed: {exc}]", file=sys.stderr)
 
     return pull.html_url
-
-
-def open_autofix_prs(github_client, repo_full_name: str) -> list[str]:
-    """URLs of autofix PRs still open — so automation doesn't stack new ones."""
-    repo = github_client.get_repo(repo_full_name)
-    return [
-        pull.html_url for pull in repo.get_pulls(state="open")
-        if pull.head.ref.startswith("autofix/")
-    ]
