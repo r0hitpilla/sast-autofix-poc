@@ -113,3 +113,33 @@ def test_fix_scanner_still_flags_is_retried_when_retriage_disagrees(tmp_path):
                                     max_retries=1, baseline_count=1, retriage=retriage)
 
     assert result.validated is False and result.failure == "still flagged"
+
+
+def test_fix_that_introduces_a_new_finding_is_rejected(tmp_path):
+    finding = make_finding(line=123, rule="r.xss", cwe="CWE-79")
+    repo = _repo(tmp_path, "y = 2\n")
+    fix = FixResult(finding=finding, diff="d", applied=True, branch="b", baseline="y = 1\n")
+    new_issue = make_finding(line=124, rule="r.render-template-string", cwe="CWE-96")
+
+    with patch("validator.scan", return_value=[new_issue]), \
+         patch("validator.run_test_suite", return_value=(True, "9 passed")), \
+         patch("validator.fix_finding", return_value=fix) as mock_fix:
+        result = validate_and_retry(fix, MagicMock(), repo, str(tmp_path), [], max_retries=1,
+                                    known_rules={"r.xss"})
+
+    assert result.validated is False
+    assert "introduced new security findings" in mock_fix.call_args.kwargs["retry_feedback"]
+    assert "r.render-template-string" in result.test_output
+
+
+def test_fix_generation_skips_hidden_reasoning(tmp_path):
+    from fixer import fix_finding
+    (tmp_path / "app.py").write_text("x = 1\n")
+    repo = MagicMock()
+    repo.working_tree_dir = str(tmp_path)
+    ollama = MagicMock()
+    ollama.generate.return_value = "no blocks"
+
+    fix_finding(make_finding(line=1), ollama, repo)
+
+    assert ollama.generate.call_args.kwargs["think"] is False

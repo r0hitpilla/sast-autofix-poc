@@ -120,10 +120,25 @@ def _check(
     finding: Finding,
     baseline_count: int | None = None,
     baseline_content: str | None = None,
+    known_rules: set | None = None,
 ):
     rescanned = scan(target_repo, semgrep_rulesets)
     still_present = finding_still_present(finding, rescanned, baseline_count)
     tests_passed, test_output = run_test_suite(target_repo)
+    if known_rules is not None:
+        # A fix that trades one finding for another (escaping XSS via
+        # render_template_string -> template injection) is not a fix.
+        introduced = [
+            f for f in rescanned
+            if f.file == finding.file and f.rule_id not in known_rules
+        ]
+        if introduced:
+            tests_passed = False
+            test_output = (
+                "The fix introduced new security findings: "
+                + "; ".join(f"line {f.line} {f.cwe} ({f.rule_id}): {f.message}" for f in introduced)
+                + "\n" + test_output
+            )
     broken = new_code_errors(
         finding.file, baseline_content, _read(target_repo, finding.file)
     )
@@ -240,6 +255,7 @@ def validate_and_retry(
     base_branch: str = "main",
     review: bool = False,
     retriage=None,
+    known_rules: set | None = None,
 ) -> ValidationResult:
     """Validate an already-applied fix; on failure feed the reason back to the
     LLM for a new fix, up to `max_retries` more attempts.
@@ -267,7 +283,8 @@ def validate_and_retry(
         else:
             # Every attempt gets validated, including the last one.
             still_present, tests_passed, test_output, remaining = _check(
-                target_repo, semgrep_rulesets, finding, baseline_count, baseline
+                target_repo, semgrep_rulesets, finding, baseline_count, baseline,
+                known_rules,
             )
             _progress(finding, attempts, still_present, tests_passed)
             outcome = _assess(

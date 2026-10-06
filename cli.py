@@ -274,6 +274,7 @@ def run_pipeline(
                 baseline_count=remaining[rule_file_key],
                 base_branch=base_branch,
                 review=cfg.fix_review,
+                known_rules={f.rule_id for f in findings if f.file == finding.file},
                 retriage=lambda f: triage_finding(
                     f, ollama, laya, cfg.threshold_fix, cfg.threshold_review,
                     max_rounds=cfg.triage_max_rounds,

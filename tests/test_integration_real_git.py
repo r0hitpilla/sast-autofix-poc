@@ -39,7 +39,7 @@ class FakeOllama:
         self.output = output
         self.prompts = []
 
-    def generate(self, prompt):
+    def generate(self, prompt, think=None):
         self.prompts.append(prompt)
         return self.output
 

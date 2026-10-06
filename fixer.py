@@ -231,7 +231,7 @@ def fix_finding(
 
     try:
         model_output = ollama.generate(
-            build_fix_prompt(finding, retry_feedback, context, header)
+            build_fix_prompt(finding, retry_feedback, context, header), think=False
         )
     except Exception as exc:
         # Spec: an Ollama call failure must never take the pipeline down —
