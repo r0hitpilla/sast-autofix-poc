@@ -57,7 +57,7 @@ export function FindingDetail() {
                   {f.fix && !f.fix.validated && (
                     <Card title="Not fixed automatically" aside={<Pill tone="amber">needs a developer</Pill>}>
                       <div className="prose" style={{ marginBottom: 10 }}>{f.fix.attempts} attempt(s) failed validation{f.fix.failure ? ` (${f.fix.failure})` : ""}. Last check output:</div>
-                      {f.fix.check_output && <pre className="code" style={{ margin: 0, padding: 12, maxHeight: 220 }}>{f.fix.check_output}</pre>}
+                      {f.fix.check_output && <pre className="code" style={{ margin: 0, padding: 12, maxHeight: 220, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{f.fix.check_output}</pre>}
                       {f.fix.last_proposal && (
                         <details style={{ marginTop: 12 }}><summary>Last proposed change (unverified)</summary>
                           <pre className="code" style={{ margin: "8px 0 0", padding: 12 }}>{f.fix.last_proposal}</pre></details>
