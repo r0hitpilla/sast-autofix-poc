@@ -138,3 +138,26 @@ def test_triage_finding_routes_to_review_on_laya_failure():
     # for a genuine calibrated "definitely a false positive" score.
     assert "laya" in result.llm_reasoning.lower()
     assert "laya model error" in result.llm_reasoning
+
+
+def test_laya_state_keeps_evidence_compact_and_ahead_of_code():
+    from triage import build_laya_state
+
+    finding = make_finding()
+    long_answer = "blah " * 400 + "\nVERDICT: username flows unescaped into the SQL string."
+    state = build_laya_state(finding, [
+        ("Initial analysis", long_answer),
+        (INVESTIGATION_QUESTIONS["sanitization"][1], "**VERDICT:** nothing sanitizes it"),
+    ])
+
+    assert "- Initial analysis: username flows unescaped into the SQL string." in state
+    assert "- sanitization: nothing sanitizes it" in state
+    assert "blah" not in state
+    assert state.index("sanitization") < state.index("Flagged code")
+    assert len(state) < 1500
+
+
+def test_answer_without_verdict_is_capped():
+    from triage import summarize_answer
+
+    assert len(summarize_answer("x " * 500)) <= 240

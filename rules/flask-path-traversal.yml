@@ -1,0 +1,36 @@
+rules:
+  - id: flask-send-file-path-traversal
+    mode: taint
+    languages: [python]
+    severity: ERROR
+    message: >-
+      A user-controlled value reaches send_file()/open() as a filesystem path
+      without containment, so "../" sequences can read files outside the
+      intended directory. Serve the file with
+      flask.send_from_directory(<base_dir>, <name>) or build the path with
+      werkzeug.utils.safe_join(<base_dir>, <name>) and abort(404) when it
+      returns None.
+    metadata:
+      cwe:
+        - "CWE-22: Improper Limitation of a Pathname to a Restricted Directory ('Path Traversal')"
+      category: security
+    pattern-sources:
+      - patterns:
+          - pattern-inside: |
+              @$APP.route(...)
+              def $FUNC(..., $PARAM, ...):
+                ...
+          - pattern: $PARAM
+      - pattern: flask.request.$ATTR
+    pattern-sanitizers:
+      - pattern: werkzeug.utils.safe_join(...)
+      - pattern: werkzeug.security.safe_join(...)
+      - pattern: flask.safe_join(...)
+      - pattern: os.path.basename(...)
+      - pattern: werkzeug.utils.secure_filename(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: flask.send_file($PATH, ...)
+              - pattern: open($PATH, ...)
+          - focus-metavariable: $PATH

@@ -1,6 +1,6 @@
 ollama:
   host: http://localhost:11434
-  model: hf.co/mradermacher/Qwen3-Coder-30B-A3B-Instruct-Heretic-i1-GGUF:Q4_K_M
+  model: qwen3.5:35b-a3b
 laya:
   model: convaiinnovations/laya
   max_rounds: 3   # follow-up questions Laya may ask the LLM per finding
@@ -11,6 +11,7 @@ semgrep:
   rulesets:
     - p/security-audit
     - p/owasp-top-ten
+    - rules/   # custom rules (e.g. Flask path traversal) the public packs miss
 pr:
   strategy: single   # or per-finding
 max_fix_retries: 3   # LLM re-fix + rescan rounds after the first attempt

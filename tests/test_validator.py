@@ -211,3 +211,42 @@ def test_validate_and_retry_restores_dirty_file_before_reverting():
     # the file is already clean by the time HEAD moves.
     checkout_calls = [c.args for c in repo.git.checkout.call_args_list]
     assert checkout_calls.index(("--", finding.file)) < checkout_calls.index(("main",))
+
+
+def test_new_code_errors_flags_a_deleted_dependency_line():
+    from validator import new_code_errors
+
+    before = "def f(db):\n    conn = db()\n    return conn.execute('q')\n"
+    after = "def f(db):\n    return conn.execute('q')\n"
+
+    assert new_code_errors("app.py", before, after) == ["undefined name 'conn'"]
+
+
+def test_new_code_errors_ignores_preexisting_problems_and_non_python():
+    from validator import new_code_errors
+
+    before = "x = undefined_thing\n"
+    assert new_code_errors("app.py", before, before + "y = 1\n") == []
+    assert new_code_errors("app.js", "a", "b(") == []
+    assert new_code_errors("app.py", "x = 1\n", "x = (\n")[0].startswith("syntax error")
+
+
+def test_validate_rejects_a_fix_that_clears_the_scan_but_breaks_the_code(tmp_path):
+    (tmp_path / "app.py").write_text("def f(db):\n    return conn.execute('q')\n")
+    finding = make_finding()
+    fix_result = FixResult(
+        finding=finding, diff="d", applied=True, branch="autofix/x",
+        baseline="def f(db):\n    conn = db()\n    return conn.execute('q')\n",
+    )
+    repo = MagicMock()
+    repo.working_tree_dir = str(tmp_path)
+
+    with patch("validator.scan", return_value=[]), \
+         patch("validator.run_test_suite", return_value=(True, "no tests found")):
+        result = validate_and_retry(
+            fix_result, MagicMock(), repo, target_repo=str(tmp_path),
+            semgrep_rulesets=[], max_retries=0,
+        )
+
+    assert result.validated is False
+    assert "undefined name 'conn'" in result.test_output

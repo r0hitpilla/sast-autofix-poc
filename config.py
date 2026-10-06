@@ -18,6 +18,13 @@ class Config:
     triage_max_rounds: int = 3
 
 
+def resolve_ruleset(ruleset: str, config_dir: str) -> str:
+    """Registry packs ("p/...") pass through; local rule files are made
+    absolute, because Semgrep runs with cwd set to the target repo."""
+    local = os.path.join(config_dir, ruleset)
+    return local if os.path.exists(local) else ruleset
+
+
 def load_config(path: str = "config.yaml") -> Config:
     with open(path) as f:
         raw = yaml.safe_load(f)
@@ -28,7 +35,10 @@ def load_config(path: str = "config.yaml") -> Config:
         laya_model=raw["laya"]["model"],
         threshold_fix=raw["thresholds"]["fix"],
         threshold_review=raw["thresholds"]["review"],
-        semgrep_rulesets=raw["semgrep"]["rulesets"],
+        semgrep_rulesets=[
+            resolve_ruleset(r, os.path.dirname(os.path.abspath(path)))
+            for r in raw["semgrep"]["rulesets"]
+        ],
         pr_strategy=raw["pr"]["strategy"],
         max_fix_retries=raw["max_fix_retries"],
         triage_max_rounds=raw.get("laya", {}).get("max_rounds", 3),

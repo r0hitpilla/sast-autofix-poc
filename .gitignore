@@ -5,3 +5,4 @@ __pycache__/
 .env
 sample_vuln_app/
 .pytest_cache/
+reports/

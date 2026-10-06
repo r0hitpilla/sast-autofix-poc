@@ -50,6 +50,43 @@ Set your GitHub token (repo scope) before running `pr` or `run` for real:
 
 Drop `--dry-run` once you're ready to actually push and open the PR.
 
+## Running automatically on GitHub
+
+`ci/sast-autofix.yml` is a GitHub Actions workflow. On every push to `main`
+(or a manual "Run workflow") it scans, triages, fixes and opens a PR. It
+runs on a **self-hosted runner on the DGX Spark**, because Ollama, Laya and
+Semgrep are local there. No source code goes to a cloud LLM.
+
+One-time setup for a repo (e.g. `r0hitpilla/sast-poc-vuln-app`):
+
+1. Copy `ci/sast-autofix.yml` to `.github/workflows/sast-autofix.yml` in
+   that repo and push it.
+2. **Settings → Actions → General → Workflow permissions:** turn on "Allow
+   GitHub Actions to create and approve pull requests".
+3. **Settings → Actions → Runners → New self-hosted runner** (Linux, ARM64).
+   Run the commands it shows on the DGX Spark, and add
+   `--labels sast-autofix` to the `./config.sh` line. Then install it as a
+   service with `sudo ./svc.sh install && sudo ./svc.sh start`.
+4. Optional: if this tool lives somewhere other than
+   `/home/rcxdigital/SAST-AUTOFIX-POC/sast-autofix-poc`, set the repo
+   variable `SAST_AUTOFIX_HOME`.
+
+Each run:
+- pushes `autofix/run-<run id>` and opens a PR with a changed-lines table
+  and inline comments on every modified line;
+- writes a run report (findings, Laya verdicts and the questions it asked,
+  fix attempts, what's still flagged, stage timings) to the run's **job
+  summary** page, and uploads it as the `sast-autofix-report` artifact;
+- does nothing while an earlier `autofix/*` PR is still open
+  (`--skip-if-open-pr`), so unreviewed fixes don't pile up. Merging the PR
+  pushes to `main`, which triggers the next run on whatever is left.
+
+The workflow deliberately does not run on `pull_request`. On a public repo
+that would let pull requests from forks run code on your self-hosted runner.
+
+Locally, every `run`/`pr` also writes `reports/sast-autofix-report.md`
+and `.json`.
+
 ## Trust model / prompt-injection surface
 
 This tool feeds source code from the scanned repository straight into a local

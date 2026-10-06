@@ -59,3 +59,23 @@ def test_run_semgrep_scans_dot_from_inside_the_target_repo():
     assert cmd[-1] == "."
     assert "sample_vuln_app" not in cmd
     assert mock_run.call_args.kwargs["cwd"] == "sample_vuln_app"
+
+
+def test_snippet_is_read_from_the_file_when_semgrep_redacts_it(tmp_path):
+    (tmp_path / "app.py").write_text("a = 1\nquery = f'{x}'\nrows = run(query)\nb = 2\n")
+    raw = json.dumps({"results": [{
+        "path": "app.py", "check_id": "r", "start": {"line": 2}, "end": {"line": 3},
+        "extra": {"lines": "requires login", "message": "m", "metadata": {}},
+    }]})
+
+    [finding] = parse_semgrep_json(raw, str(tmp_path))
+
+    assert finding.snippet == "query = f'{x}'\nrows = run(query)"
+
+
+def test_local_rule_paths_resolve_against_the_config_dir(tmp_path):
+    from config import resolve_ruleset
+
+    (tmp_path / "rules").mkdir()
+    assert resolve_ruleset("rules/", str(tmp_path)) == os.path.join(str(tmp_path), "rules/")
+    assert resolve_ruleset("p/owasp-top-ten", str(tmp_path)) == "p/owasp-top-ten"

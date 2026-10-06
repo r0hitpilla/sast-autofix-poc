@@ -1,0 +1,64 @@
+# Copy to .github/workflows/sast-autofix.yml in the repo to protect.
+#
+# Runs on a self-hosted runner on the DGX Spark: Ollama, Laya and Semgrep are
+# local there, and no code or findings leave the machine except the fix PR.
+# Deliberately NOT triggered by pull_request — on a public repo that would let
+# fork PRs execute code on the self-hosted runner.
+name: SAST Autofix
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write        # push the autofix/run-<id> branch
+  pull-requests: write   # open the PR and its inline line comments
+
+concurrency:
+  group: sast-autofix
+  cancel-in-progress: false
+
+jobs:
+  autofix:
+    runs-on: [self-hosted, sast-autofix]
+    timeout-minutes: 120
+    env:
+      # Where sast-autofix-poc (with its venv) lives on the runner machine.
+      SAST_AUTOFIX_HOME: ${{ vars.SAST_AUTOFIX_HOME || '/home/rcxdigital/SAST-AUTOFIX-POC/sast-autofix-poc' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Prepare tools and git identity
+        run: |
+          echo "$SAST_AUTOFIX_HOME/venv/bin" >> "$GITHUB_PATH"
+          git config user.name "sast-autofix[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Install the repo's own dependencies (for its test suite)
+        run: |
+          if [ -f requirements.txt ]; then
+            python3 -m venv .venv
+            .venv/bin/pip install -q -r requirements.txt pytest
+          fi
+
+      - name: Scan, triage (Laya + LLM), fix, rescan, open PR
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPO: ${{ github.repository }}
+        run: |
+          "$SAST_AUTOFIX_HOME/venv/bin/python" "$SAST_AUTOFIX_HOME/cli.py" \
+            --config "$SAST_AUTOFIX_HOME/config.yaml" \
+            run --target-repo "$GITHUB_WORKSPACE" \
+            --report-dir "$RUNNER_TEMP/sast-autofix" \
+            --skip-if-open-pr
+
+      - name: Upload run report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: sast-autofix-report
+          path: ${{ runner.temp }}/sast-autofix/
+          if-no-files-found: ignore

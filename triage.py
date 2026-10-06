@@ -1,8 +1,22 @@
+import re
 import sys
 
 from models import Finding, TriageResult
 
 TRIAGE_QUESTION = "is this a true positive security vulnerability"
+
+VERDICT_INSTRUCTION = (
+    "\n\nEnd your answer with exactly one final line of the form:\n"
+    "VERDICT: <one-sentence conclusion>"
+)
+VERDICT_RE = re.compile(r"^[\s*_`#>-]*VERDICT[\s*_`]*:\s*(.+)$", re.IGNORECASE | re.MULTILINE)
+
+# Laya reads at most ~512 tokens and drops everything past that. The evidence
+# lines go BEFORE the code in its input, so if anything gets cut it's the tail of
+# the code, never the LLM's conclusions; each line is capped so a verbose
+# answer can't crowd out the others.
+EVIDENCE_LINE_CHARS = 240
+SNIPPET_CHARS = 400
 
 # The evidence Laya can ask the LLM for. Keys are the option ids Laya chooses
 # between; each value is (what Laya sees as the option, what the LLM is asked).
@@ -52,6 +66,7 @@ def build_reasoning_prompt(finding: Finding, context: str = "") -> str:
         "view might miss, such as input being sanitized earlier in the call "
         "chain, the route being unreachable, or the sink being safe in this "
         "context."
+        + VERDICT_INSTRUCTION
     )
 
 
@@ -68,16 +83,34 @@ def build_followup_prompt(
         f"Code context:\n{context or finding.snippet}\n\n"
         f"Evidence gathered so far:\n{transcript}\n\n"
         f"Answer this specific question concisely, citing line numbers:\n{question}"
+        + VERDICT_INSTRUCTION
     )
 
 
+def summarize_answer(answer: str, limit: int = EVIDENCE_LINE_CHARS) -> str:
+    """The LLM's VERDICT line if it gave one, else the start of its answer."""
+    verdicts = VERDICT_RE.findall(answer)
+    text = verdicts[-1] if verdicts else answer
+    text = " ".join(text.replace("*", "").split())
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def question_label(question: str) -> str:
+    for key, (_, text) in INVESTIGATION_QUESTIONS.items():
+        if text == question:
+            return key
+    return question
+
+
 def build_laya_state(finding: Finding, evidence: list[tuple[str, str]]) -> str:
-    transcript = "\n\n".join(f"Q: {q}\nA: {a}" for q, a in evidence)
+    lines = "\n".join(
+        f"- {question_label(q)}: {summarize_answer(a)}" for q, a in evidence
+    )
     return (
-        f"Finding: {finding.message} (CWE {finding.cwe}) at "
+        f"Static analysis finding: {finding.message} (CWE {finding.cwe}) at "
         f"{finding.file}:{finding.line}.\n"
-        f"Code:\n{finding.snippet}\n\n"
-        f"Analyst evidence:\n{transcript}"
+        f"Security analyst conclusions:\n{lines}\n"
+        f"Flagged code:\n{finding.snippet[:SNIPPET_CHARS]}"
     )
 
 

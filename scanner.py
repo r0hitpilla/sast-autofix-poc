@@ -1,10 +1,27 @@
 import json
+import os
 import subprocess
 
 from models import Finding
 
 
-def parse_semgrep_json(raw_json: str) -> list[Finding]:
+# Semgrep's JSON replaces `extra.lines` with this placeholder unless you're
+# logged in to the Semgrep platform.
+REDACTED_LINES = "requires login"
+
+
+def read_lines(target_repo: str | None, path: str, start: int, end: int) -> str | None:
+    if target_repo is None:
+        return None
+    try:
+        with open(os.path.join(target_repo, path)) as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return None
+    return "\n".join(lines[start - 1:end])
+
+
+def parse_semgrep_json(raw_json: str, target_repo: str | None = None) -> list[Finding]:
     data = json.loads(raw_json)
     findings = []
     for result in data.get("results", []):
@@ -13,13 +30,23 @@ def parse_semgrep_json(raw_json: str) -> list[Finding]:
         cwe_list = metadata.get("cwe", [])
         cwe = cwe_list[0] if cwe_list else "unknown"
 
+        # Read the flagged lines from the file itself: Semgrep's own copy is
+        # just "requires login" without a platform login, which would leave
+        # the LLM and Laya judging a finding with no code at all.
+        snippet = read_lines(
+            target_repo, result["path"], result["start"]["line"],
+            result.get("end", result["start"])["line"],
+        )
+        if snippet is None:
+            snippet = extra.get("lines", "")
+
         findings.append(Finding(
             file=result["path"],
             line=result["start"]["line"],
             rule_id=result["check_id"],
             cwe=cwe,
             message=extra.get("message", ""),
-            snippet=extra.get("lines", ""),
+            snippet=snippet,
         ))
     return findings
 
@@ -47,4 +74,4 @@ def run_semgrep(target_repo: str, rulesets: list[str]) -> str:
 
 def scan(target_repo: str, rulesets: list[str]) -> list[Finding]:
     raw = run_semgrep(target_repo, rulesets)
-    return parse_semgrep_json(raw)
+    return parse_semgrep_json(raw, target_repo)

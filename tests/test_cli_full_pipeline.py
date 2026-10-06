@@ -1,7 +1,15 @@
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from cli import build_parser, run_pipeline
 from models import Finding, FixResult, TriageResult, ValidationResult
+
+
+@pytest.fixture(autouse=True)
+def isolated_cwd(tmp_path, monkeypatch):
+    # run_pipeline writes its report under ./reports — keep that out of the repo.
+    monkeypatch.chdir(tmp_path)
 
 
 def make_finding(file="app.py", line=41):
@@ -181,3 +189,66 @@ def test_run_pipeline_summarises_every_finding_outcome(tmp_path, capsys):
     assert "sent to review: 1" in out
     assert "rejected (likely false positive): 1" in out
     assert "fix generation failed: 1" in out
+
+
+def test_run_pipeline_skips_entirely_while_an_autofix_pr_is_open(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("GITHUB_TOKEN", "t")
+    with patch("cli.load_config", return_value=MagicMock()), \
+         patch("cli.Github"), \
+         patch("cli.open_autofix_prs", return_value=["https://github.com/o/r/pull/7"]), \
+         patch("cli.scan") as mock_scan:
+        run_pipeline(make_target_repo(tmp_path), "config.yaml", dry_run=False, skip_if_open_pr=True)
+
+    mock_scan.assert_not_called()
+    assert "pull/7" in capsys.readouterr().out
+
+
+def test_run_pipeline_writes_report_and_job_summary(tmp_path, monkeypatch):
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    finding = make_finding()
+    triage_result = TriageResult(
+        finding=finding, llm_reasoning="r", laya_score=0.95, route="fix",
+        evidence=[("Initial analysis", "r")],
+    )
+    validation_result = ValidationResult(
+        finding=finding, clean=True, test_output="no tests found", validated=True,
+    )
+
+    with patch("cli.load_config", return_value=MagicMock()), \
+         patch("cli.scan", side_effect=[[finding], []]), \
+         patch("cli.OllamaClient"), \
+         patch("cli.LayaClient"), \
+         patch("cli.git.Repo", return_value=MagicMock()), \
+         patch("cli.triage_finding", return_value=triage_result), \
+         patch("cli.fix_finding", return_value=FixResult(finding, "d", True, "b")), \
+         patch("cli.validate_and_retry", return_value=validation_result), \
+         patch("cli.commit_validated_findings", return_value=["autofix/run-1"]), \
+         patch("cli.branch_hunks", return_value=[]):
+        run_pipeline(make_target_repo(tmp_path), "config.yaml", dry_run=True,
+                     report_dir=str(tmp_path / "out"))
+
+    md = (tmp_path / "out" / "sast-autofix-report.md").read_text()
+    assert "| 1 | 1 | 1 | 100% | 0 | 0 | 0 |" in md
+    assert "`app.py:41`" in md
+    assert summary.read_text() == md
+    assert (tmp_path / "out" / "sast-autofix-report.json").exists()
+
+
+def test_run_pipeline_never_auto_fixes_workflow_files(tmp_path, capsys):
+    finding = make_finding(file=".github/workflows/ci.yml")
+    triage_result = TriageResult(
+        finding=finding, llm_reasoning="r", laya_score=0.95, route="fix",
+    )
+
+    with patch("cli.load_config", return_value=MagicMock()), \
+         patch("cli.scan", return_value=[finding]), \
+         patch("cli.OllamaClient"), \
+         patch("cli.LayaClient"), \
+         patch("cli.git.Repo", return_value=MagicMock()), \
+         patch("cli.triage_finding", return_value=triage_result), \
+         patch("cli.fix_finding") as mock_fix_finding:
+        run_pipeline(make_target_repo(tmp_path), "config.yaml", dry_run=True)
+
+    mock_fix_finding.assert_not_called()
+    assert "ci/workflow file, never auto-fixed): 1" in capsys.readouterr().out.lower()

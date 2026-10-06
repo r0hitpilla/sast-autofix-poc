@@ -1,4 +1,6 @@
+import os
 import sys
+from datetime import datetime
 
 from diff_utils import format_range
 from git_utils import checkout_branch
@@ -190,12 +192,19 @@ def build_line_comments(
     return comments
 
 
-def commit_validated_findings(repo, entries, strategy: str) -> list[str]:
+def run_id() -> str:
+    """A per-run identifier: the Actions run id in CI, a timestamp locally."""
+    return os.environ.get("GITHUB_RUN_ID") or datetime.now().strftime("%Y%m%d-%H%M%S")
+
+
+def commit_validated_findings(repo, entries, strategy: str, run: str | None = None) -> list[str]:
     validated_entries = [(t, v) for t, v in entries if v.validated]
     branches = []
 
     if strategy == "single":
-        branch = "autofix/all-validated-findings"
+        # Unique per run: a fixed name makes every run after the first fail
+        # to push (non-fast-forward against the previous run's branch).
+        branch = f"autofix/run-{run or run_id()}"
         checkout_branch(repo, branch)
         for triage, _ in validated_entries:
             repo.git.add(triage.finding.file)
@@ -252,3 +261,12 @@ def open_pr(
             print(f"[pr warning: inline line comments failed: {exc}]", file=sys.stderr)
 
     return pull.html_url
+
+
+def open_autofix_prs(github_client, repo_full_name: str) -> list[str]:
+    """URLs of autofix PRs still open — so automation doesn't stack new ones."""
+    repo = github_client.get_repo(repo_full_name)
+    return [
+        pull.html_url for pull in repo.get_pulls(state="open")
+        if pull.head.ref.startswith("autofix/")
+    ]

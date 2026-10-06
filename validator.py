@@ -1,5 +1,9 @@
 import os
 import subprocess
+import sys
+
+import pyflakes.api
+import pyflakes.messages
 
 from fixer import fix_finding, restore_file
 from models import Finding, FixResult, ValidationResult
@@ -37,6 +41,46 @@ def finding_still_present(
     return current >= baseline_count
 
 
+def _pytest_for(target_repo: str) -> str:
+    """The target's own pytest when it has a .venv (where its dependencies
+    live), else whatever pytest is on PATH."""
+    own = os.path.join(os.path.abspath(target_repo), ".venv", "bin", "pytest")
+    return own if os.path.exists(own) else "pytest"
+
+
+def new_code_errors(file: str, before: str | None, after: str | None) -> list[str]:
+    """Undefined names and syntax errors the fix INTRODUCED in a Python file.
+
+    A security rescan can't tell a fix from a broken file: deleting the
+    vulnerable function "fixes" the finding. This catches the commonest
+    breakage — removing a line other code depends on — with no tests needed.
+    Problems already present before the fix are not held against it.
+    """
+    if not file.endswith(".py") or before is None or after is None:
+        return []
+
+    def problems(source: str) -> list[str]:
+        found = []
+
+        class Collect:
+            def unexpectedError(self, filename, msg):
+                found.append(f"error: {msg}")
+
+            def syntaxError(self, filename, msg, lineno, offset, text):
+                found.append(f"syntax error: {msg}")
+
+            def flake(self, message):
+                if isinstance(message, (pyflakes.messages.UndefinedName,
+                                        pyflakes.messages.UndefinedLocal)):
+                    found.append(message.message % message.message_args)
+
+        pyflakes.api.check(source, file, Collect())
+        return found
+
+    old = problems(before)
+    return [p for p in problems(after) if p not in old]
+
+
 def run_test_suite(target_repo: str) -> tuple[bool, str]:
     if not os.path.isdir(os.path.join(target_repo, "tests")):
         return True, "no tests found"
@@ -45,7 +89,7 @@ def run_test_suite(target_repo: str) -> tuple[bool, str]:
         # "tests", not os.path.join(target_repo, "tests") — cwd is already
         # target_repo, so a prefixed path would resolve to
         # target_repo/target_repo/tests.
-        ["pytest", "tests", "-v"],
+        [_pytest_for(target_repo), "tests", "-v"],
         capture_output=True,
         text=True,
         cwd=target_repo,
@@ -53,15 +97,32 @@ def run_test_suite(target_repo: str) -> tuple[bool, str]:
     return result.returncode == 0, result.stdout + result.stderr
 
 
+def _read(target_repo: str, file: str) -> str | None:
+    try:
+        with open(os.path.join(target_repo, file)) as f:
+            return f.read()
+    except OSError:
+        return None
+
+
 def _check(
     target_repo: str,
     semgrep_rulesets: list[str],
     finding: Finding,
     baseline_count: int | None = None,
+    baseline_content: str | None = None,
 ):
     rescanned = scan(target_repo, semgrep_rulesets)
     still_present = finding_still_present(finding, rescanned, baseline_count)
     tests_passed, test_output = run_test_suite(target_repo)
+    broken = new_code_errors(
+        finding.file, baseline_content, _read(target_repo, finding.file)
+    )
+    if broken:
+        tests_passed = False
+        test_output = (
+            f"The fix broke {finding.file}: " + "; ".join(broken) + "\n" + test_output
+        )
     remaining_lines = sorted(
         f.line for f in rescanned
         if f.rule_id == finding.rule_id and f.file == finding.file
@@ -86,8 +147,17 @@ def build_feedback(
     else:
         parts.append("The rescan no longer flags the finding.")
     if not tests_passed:
-        parts.append(f"But the test suite now fails:\n{test_output[:2000]}")
+        parts.append(f"But the change breaks the code:\n{test_output[:2000]}")
     return " ".join(parts)
+
+
+def _progress(finding: Finding, attempt: int, still_present: bool, tests_passed: bool) -> None:
+    rescan = "still flagged" if still_present else "clean"
+    tests = "pass" if tests_passed else "FAIL"
+    print(
+        f"    [fix attempt {attempt}] {finding.file}:{finding.line} rescan {rescan}, tests {tests}",
+        file=sys.stderr, flush=True,
+    )
 
 
 def validate_and_retry(
@@ -114,9 +184,10 @@ def validate_and_retry(
     # Validate the fix that was already applied before this call, before
     # spending any retries on it.
     still_present, tests_passed, test_output, remaining_lines = _check(
-        target_repo, semgrep_rulesets, finding, baseline_count
+        target_repo, semgrep_rulesets, finding, baseline_count, baseline
     )
     attempts = 1
+    _progress(finding, attempts, still_present, tests_passed)
     if not still_present and tests_passed:
         return ValidationResult(
             finding=finding, clean=True, test_output=test_output,
@@ -146,8 +217,12 @@ def validate_and_retry(
         # fix that lands on the final retry must not be reverted just
         # because retries ran out before it could be checked.
         still_present, tests_passed, test_output, remaining_lines = _check(
-            target_repo, semgrep_rulesets, finding, baseline_count
+            target_repo, semgrep_rulesets, finding, baseline_count, baseline
         )
+        if current_fix.applied:
+            _progress(finding, attempts, still_present, tests_passed)
+        else:
+            print(f"    [fix attempt {attempts}] diff did not apply", file=sys.stderr, flush=True)
 
         if not still_present and tests_passed:
             return ValidationResult(

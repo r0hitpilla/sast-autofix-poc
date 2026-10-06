@@ -3,7 +3,7 @@ from unittest.mock import MagicMock, patch
 from git.exc import GitCommandError
 
 from models import Finding
-from fixer import apply_diff, branch_name, build_fix_prompt, fix_finding
+from fixer import apply_diff, apply_edit, branch_name, build_fix_prompt, fix_finding
 
 SAMPLE_DIFF = """--- a/app.py
 +++ b/app.py
@@ -37,7 +37,7 @@ def test_build_fix_prompt_without_retry_feedback():
     prompt = build_fix_prompt(finding)
     assert finding.file in prompt
     assert finding.snippet in prompt
-    assert "unified diff" in prompt.lower()
+    assert "<<<<<<< ORIGINAL" in prompt
 
 
 def test_build_fix_prompt_includes_retry_feedback():
@@ -202,3 +202,82 @@ def test_fix_finding_does_not_discard_on_the_first_attempt():
 
     checkout_calls = [c.args for c in repo.git.checkout.call_args_list]
     assert ("--", finding.file) not in checkout_calls
+
+
+APP = '''@app.route("/search")
+def search_users():
+    username = request.args.get("username", "")
+    conn = get_db()
+    query = f"SELECT id FROM users WHERE username = '{username}'"
+    rows = conn.execute(query).fetchall()
+    conn.close()
+    return rows
+'''
+
+
+def test_apply_edit_exact_match():
+    out = apply_edit(
+        APP,
+        '''    query = f"SELECT id FROM users WHERE username = '{username}'"
+    rows = conn.execute(query).fetchall()
+''',
+        '''    rows = conn.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchall()
+''',
+    )
+    assert 'username = ?", (username,)' in out
+    assert "conn = get_db()" in out and "conn.close()" in out
+
+
+def test_apply_edit_tolerates_lost_indentation_and_reindents():
+    out = apply_edit(
+        APP,
+        'query = f"SELECT id FROM users WHERE username = \'{username}\'"\nrows = conn.execute(query).fetchall()',
+        'rows = conn.execute(\n    "SELECT id FROM users WHERE username = ?", (username,)\n).fetchall()',
+    )
+    assert '\n    rows = conn.execute(\n        "SELECT id FROM users WHERE username = ?", (username,)\n    ).fetchall()\n' in out
+
+
+def test_apply_edit_refuses_missing_or_ambiguous_original():
+    assert apply_edit(APP, "not in the file", "x") is None
+    assert apply_edit("a\nb\na\n", "a", "z") is None
+
+
+def test_fix_finding_applies_edit_blocks_and_only_then_branches(tmp_path):
+    (tmp_path / "app.py").write_text(APP)
+    finding = make_finding()
+    ollama = MagicMock()
+    ollama.generate.return_value = '''Here is the fix:
+<<<<<<< ORIGINAL
+    query = f"SELECT id FROM users WHERE username = '{username}'"
+    rows = conn.execute(query).fetchall()
+=======
+    rows = conn.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchall()
+>>>>>>> FIXED
+'''
+    repo = MagicMock()
+    repo.working_tree_dir = str(tmp_path)
+
+    result = fix_finding(finding, ollama, repo)
+
+    assert result.applied is True
+    assert "(username,)" in (tmp_path / "app.py").read_text()
+    repo.git.apply.assert_not_called()
+    repo.git.checkout.assert_called_once_with("-b", result.branch)
+
+
+def test_fix_finding_leaves_file_and_branch_untouched_when_an_edit_misses(tmp_path):
+    (tmp_path / "app.py").write_text(APP)
+    finding = make_finding()
+    ollama = MagicMock()
+    ollama.generate.return_value = (
+        "<<<<<<< ORIGINAL\n    conn = get_db()\n=======\n    conn = db()\n>>>>>>> FIXED\n"
+        "<<<<<<< ORIGINAL\n    no such line\n=======\n    x\n>>>>>>> FIXED\n"
+    )
+    repo = MagicMock()
+    repo.working_tree_dir = str(tmp_path)
+
+    result = fix_finding(finding, ollama, repo)
+
+    assert result.applied is False
+    assert (tmp_path / "app.py").read_text() == APP
+    repo.git.checkout.assert_not_called()
