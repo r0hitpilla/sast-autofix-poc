@@ -23,7 +23,26 @@ def assign_hunks(
     per_entry: list[list[Hunk]] = [[] for _ in validated_entries]
     unassigned: list[Hunk] = []
 
+    def added_by(validation) -> set[str]:
+        return {
+            line[1:].strip() for line in (validation.fix_diff or "").splitlines()
+            if line.startswith("+") and not line.startswith("+++") and line[1:].strip()
+        }
+
+    added = [added_by(v) for _, v in validated_entries]
+
     for hunk in hunks:
+        # First choice: the one fix whose own diff added these lines (an
+        # import added at the top of the file belongs to the fix that needed
+        # it, not to whichever finding happens to be nearest).
+        wanted = {line.strip() for line in hunk.added if line.strip()}
+        owners = [
+            i for i, (t, _) in enumerate(validated_entries)
+            if t.finding.file == hunk.file and wanted and wanted <= added[i]
+        ]
+        if len(owners) == 1:
+            per_entry[owners[0]].append(hunk)
+            continue
         best, best_distance = None, None
         for i, (triage, _) in enumerate(validated_entries):
             finding = triage.finding

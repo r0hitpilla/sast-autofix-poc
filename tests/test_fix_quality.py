@@ -143,3 +143,33 @@ def test_fix_generation_skips_hidden_reasoning(tmp_path):
     fix_finding(make_finding(line=1), ollama, repo)
 
     assert ollama.generate.call_args.kwargs["think"] is False
+
+
+def test_review_parser_handles_markdown_bold_label():
+    ollama = MagicMock()
+    ollama.generate.return_value = "ok\n**REVIEW:** **APPROVE** — salted scrypt with per-user salt"
+    assert review_fix(ollama, make_finding(), "diff") == (True, "salted scrypt with per-user salt")
+
+
+def test_fix_prompt_says_only_this_file_can_change():
+    assert "cannot be created" in build_fix_prompt(make_finding())
+
+
+def test_import_hunk_is_attributed_to_the_fix_that_added_it():
+    from models import Hunk, ValidationResult
+    from pr import assign_hunks
+
+    md5 = make_finding(line=98)
+    redirect = make_finding(line=117, rule="r.redirect", cwe="CWE-601")
+    entries = [
+        (TriageResult(md5, "r", 0.9, "fix"),
+         ValidationResult(md5, True, "", True, fix_diff="+    salt = os.urandom(32)\n")),
+        (TriageResult(redirect, "r", 0.9, "fix"),
+         ValidationResult(redirect, True, "", True,
+                          fix_diff="+from urllib.parse import urlparse\n+    parsed = urlparse(n)\n")),
+    ]
+    import_hunk = Hunk("app.py", 5, 0, 6, 1, added=["from urllib.parse import urlparse"])
+
+    per_entry, unassigned = assign_hunks(entries, [import_hunk])
+
+    assert per_entry[1] == [import_hunk] and per_entry[0] == [] and unassigned == []

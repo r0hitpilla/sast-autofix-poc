@@ -13,7 +13,7 @@ import sys
 
 from models import Finding
 
-REVIEW_RE = re.compile(r"^[\s*_`#>-]*REVIEW[\s*_`]*:\s*(APPROVE|REJECT)\b[\s:—–-]*(.*)$",
+REVIEW_RE = re.compile(r"^[\s*_`#>-]*REVIEW[\s*_`]*:[\s*_`]*(APPROVE|REJECT)\b[\s*_`:—–-]*(.*)$",
                        re.IGNORECASE | re.MULTILINE)
 
 

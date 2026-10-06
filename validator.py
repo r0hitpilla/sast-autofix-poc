@@ -212,9 +212,9 @@ def _assess(
       correct fix could otherwise never pass
     - anything else -> feedback for the next attempt
     """
+    diff = file_diff(finding.file, baseline, _read(target_repo, finding.file))
     if tests_passed and not still_present:
         if review:
-            diff = file_diff(finding.file, baseline, _read(target_repo, finding.file))
             approved, reason = review_fix(ollama, finding, diff)
             print(f"    [fix review] {'APPROVE' if approved else 'REJECT'}: {reason[:150]}",
                   file=sys.stderr, flush=True)
@@ -225,7 +225,7 @@ def _assess(
                 )
         return ValidationResult(
             finding=finding, clean=True, test_output=test_output,
-            validated=True, attempts=attempts,
+            validated=True, attempts=attempts, fix_diff=diff,
         )
 
     if tests_passed and still_present and retriage is not None and remaining:
@@ -237,6 +237,7 @@ def _assess(
             return ValidationResult(
                 finding=finding, clean=False, test_output=test_output,
                 validated=True, attempts=attempts, note=SCANNER_STILL_FLAGS_NOTE,
+                fix_diff=diff,
             )
 
     return build_feedback(

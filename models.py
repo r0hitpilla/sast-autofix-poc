@@ -52,6 +52,9 @@ class ValidationResult:
     # Set when the fix was accepted with a caveat a reviewer should see,
     # e.g. the scanner still matches the pattern but triage judged it safe.
     note: str = ""
+    # The accepted fix as a unified diff against the file just before it, so
+    # PR hunks can be attributed to the fix that made them.
+    fix_diff: str = ""
 
 
 @dataclass

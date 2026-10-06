@@ -32,7 +32,9 @@ Use a separate block for each separate place you change. If you need a new
 import, add it next to the file's existing imports at the top (its own edit
 block), never inside a function, and never re-import a name the file already
 imports. Every name the new code uses must still be defined: do not delete
-lines other code depends on."""
+lines other code depends on. You can only change this one file: do not
+reference files that don't exist yet (new templates, modules, config files),
+because they cannot be created — fix the code in place."""
 
 
 def build_fix_prompt(
