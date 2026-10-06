@@ -10,9 +10,10 @@ import json
 import sys
 from datetime import datetime, timezone
 
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 
 from .db import FindingRow, Run, make_sessionmaker
+from .tracking import refresh
 
 SUPPORTED_SCHEMA_VERSIONS = {2}
 
@@ -81,7 +82,8 @@ def run_from_report(report: dict) -> Run:
             fingerprint=rec["fingerprint"],
             rule_id=f["rule_id"], cwe=f["cwe"], severity=f.get("severity") or "Medium",
             owasp=f.get("owasp") or [], file=f["file"], line=f["line"],
-            end_line=f.get("end_line"), message=f.get("message", ""), snippet=f.get("snippet", ""),
+            end_line=f.get("end_line"), cvss=f.get("cvss"), risk=rec.get("risk"),
+            message=f.get("message", ""), snippet=f.get("snippet", ""),
             laya_score=triage.get("laya_score", 0.0), route=triage.get("route", "review"),
             llm_label=triage.get("llm_label"), rounds=triage.get("rounds", 0),
             evidence=triage.get("evidence") or [], context=triage.get("context"),
@@ -97,9 +99,14 @@ def ingest(report: dict, sessionmaker=None) -> Run:
     run = run_from_report(report)
     Session = sessionmaker or make_sessionmaker()
     with Session.begin() as session:
+        # Identities this run touched before and now: both need refreshing,
+        # since a re-ingest can drop a finding a previous ingest recorded.
+        old = session.scalars(select(FindingRow.fingerprint).where(FindingRow.run_id == run.id)).all()
         session.execute(delete(FindingRow).where(FindingRow.run_id == run.id))
         session.execute(delete(Run).where(Run.id == run.id))
         session.add(run)
+        session.flush()
+        refresh(session, list(old) + [row.fingerprint for row in run.findings])
     return run
 
 

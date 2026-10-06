@@ -12,6 +12,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from models import Finding, TriageResult, ValidationResult
+from identity import distinct_locations, finding_fingerprint
+from risk import risk_score
 
 
 @dataclass
@@ -62,18 +64,27 @@ def _short_question(question: str) -> str:
     return question[:30]
 
 
+def _distinct(records) -> int:
+    return distinct_locations((r.triage.finding.file, r.triage.finding.snippet) for r in records)
+
+
 def to_markdown(report: RunReport) -> str:
     total = len(report.records)
     review = report.count(lambda r: r.triage.route == "review")
     rejected = report.count(lambda r: r.triage.route == "reject")
+    confirmed_records = [r for r in report.records if r.triage.route == "fix"]
     fix_rate = f"{report.fixed / report.confirmed:.0%}" if report.confirmed else "n/a"
+    # Rule hits are what the scanners reported; distinct findings are the
+    # places in the code, which is what gets fixed and what a reader counts.
+    scanned_cell = f"{total} rule hit(s), {_distinct(report.records)} distinct"
+    confirmed_cell = f"{report.confirmed} rule hit(s), {_distinct(confirmed_records)} distinct"
 
     lines = [
         f"# SAST Autofix run: `{report.target}`",
         "",
         "| Findings scanned | Confirmed true positives | Fixed & validated | Fix rate | Needs human review | Rejected as false positive | Still flagged after the fixes |",
         "|---|---|---|---|---|---|---|",
-        f"| {total} | {report.confirmed} | {report.fixed} | {fix_rate} | {review} | {rejected} | {len(report.residual)} |",
+        f"| {scanned_cell} | {confirmed_cell} | {report.fixed} | {fix_rate} | {review} | {rejected} | {len(report.residual)} |",
         "",
     ]
     if report.pr_urls:
@@ -122,21 +133,20 @@ def to_markdown(report: RunReport) -> str:
 SCHEMA_VERSION = 2
 
 
-def fingerprint(finding: Finding) -> str:
-    """Stable identity of a finding across runs: rule + file + the flagged
-    code with whitespace collapsed — NOT the line number, which moves as
-    other code changes above it."""
-    code = " ".join(finding.snippet.split())
-    return hashlib.sha256(f"{finding.rule_id}|{finding.file}|{code}".encode()).hexdigest()[:16]
+def fingerprint(finding: Finding, repository: str = "") -> str:
+    """Stable identity of a finding across runs, branches and repositories.
+    See identity.py for what it covers and what it deliberately leaves out."""
+    return finding_fingerprint(repository, finding.rule_id, finding.file, finding.snippet)
 
 
-def _record_json(r: FindingRecord) -> dict:
+def _record_json(r: FindingRecord, repository: str = "") -> dict:
     from triage import llm_label, question_label
 
     v = r.validation
     return {
-        "fingerprint": fingerprint(r.triage.finding),
+        "fingerprint": fingerprint(r.triage.finding, repository),
         "finding": dataclasses.asdict(r.triage.finding),
+        "risk": risk_score(r.triage.finding),
         "triage": {
             "laya_score": r.triage.laya_score,
             "route": r.triage.route,
@@ -164,20 +174,23 @@ def _record_json(r: FindingRecord) -> dict:
 
 
 def to_json(report: RunReport) -> str:
+    repository = (report.meta.get("run") or {}).get("repository", "")
     return json.dumps({
         "schema_version": SCHEMA_VERSION,
         "target": report.target,
         **report.meta,
         "summary": {
             "scanned": len(report.records),
+            "scanned_distinct": _distinct(report.records),
             "confirmed": report.confirmed,
+            "confirmed_distinct": _distinct(r for r in report.records if r.triage.route == "fix"),
             "fixed": report.fixed,
             "review": report.count(lambda r: r.triage.route == "review"),
             "rejected": report.count(lambda r: r.triage.route == "reject"),
             "blocking": len(report.blocking),
             "residual": len(report.residual),
         },
-        "findings": [_record_json(r) for r in report.records],
+        "findings": [_record_json(r, repository) for r in report.records],
         "residual": [dataclasses.asdict(f) for f in report.residual],
         "timings": report.timings,
         "pr_urls": report.pr_urls,

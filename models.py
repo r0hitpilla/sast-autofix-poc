@@ -13,6 +13,8 @@ class Finding:
     severity: str = "Medium"
     owasp: list[str] = field(default_factory=list)
     end_line: int | None = None
+    # CVSS base score of a dependency advisory (osv findings); None elsewhere.
+    cvss: float | None = None
 
 
 @dataclass

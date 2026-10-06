@@ -25,6 +25,8 @@ from pr import (
 )
 from provenance import provenance
 from report import FindingRecord, RunReport, write_report
+from risk import by_risk
+from history import fetch_history, finding_history, history_note
 from scanner import scan
 from triage import triage_finding
 from validator import count_same_rule_and_file, validate_and_retry
@@ -32,13 +34,13 @@ from validator import count_same_rule_and_file, validate_and_retry
 
 def cmd_scan(args):
     cfg = load_config(args.config)
-    findings = scan(args.target_repo, cfg.semgrep_rulesets)
+    findings = scan(args.target_repo, cfg.semgrep_rulesets, cfg.engines)
     print(json.dumps([dataclasses.asdict(f) for f in findings], indent=2))
 
 
 def cmd_triage(args):
     cfg = load_config(args.config)
-    findings = scan(args.target_repo, cfg.semgrep_rulesets)
+    findings = scan(args.target_repo, cfg.semgrep_rulesets, cfg.engines)
     ollama = OllamaClient(host=cfg.ollama_host, model=cfg.ollama_model)
     laya = LayaClient(model=cfg.laya_model)
 
@@ -56,9 +58,11 @@ def cmd_triage(args):
     ], indent=2))
 
 
-def triage_all(findings, target_repo, cfg, ollama, laya):
+def triage_all(findings, target_repo, cfg, ollama, laya, repository="", history=None):
     """Triage every finding against the UNMODIFIED repo, before any fix lands —
-    later fixes shift line numbers, which would skew the code context."""
+    later fixes shift line numbers, which would skew the code context.
+
+    `history` (see history.py) tells the LLM what earlier runs concluded."""
     results = []
     by_location = {}
     for n, f in enumerate(findings, start=1):
@@ -77,6 +81,7 @@ def triage_all(findings, target_repo, cfg, ollama, laya):
             f, ollama, laya, cfg.threshold_fix, cfg.threshold_review,
             max_rounds=cfg.triage_max_rounds,
             context=context,
+            history=history_note(finding_history(history or {}, repository, f)),
         )
         result = dataclasses.replace(result, context=context)
         asked = len(result.evidence) - 1 if result.evidence else 0
@@ -189,8 +194,10 @@ def run_pipeline(
     }
 
     with timed(timings, "scan"):
-        findings = scan(target_repo, cfg.semgrep_rulesets)
+        findings = scan(target_repo, cfg.semgrep_rulesets, cfg.engines)
     ollama = OllamaClient(host=cfg.ollama_host, model=cfg.ollama_model)
+    # What earlier runs found and tried for this repository (empty if no dashboard).
+    history = fetch_history(cfg.dashboard_url, repo_full_name)
     laya = LayaClient(model=cfg.laya_model)
 
     # Every finding ends up in exactly one of these buckets — a human reading
@@ -225,7 +232,8 @@ def run_pipeline(
     }
 
     with timed(timings, "triage (Laya + LLM)"):
-        triage_results = triage_all(findings, target_repo, cfg, ollama, laya)
+        triage_results = triage_all(findings, target_repo, cfg, ollama, laya,
+                                    repository=repo_full_name, history=history)
 
     if check_only:
         # Used on fix branches (SV-fix): report and gate, but never generate
@@ -244,12 +252,13 @@ def run_pipeline(
 
     entries = []
     failed_at = {}  # (file, line) -> ValidationResult of a fix that never validated
-    for triage_result in triage_results:
+    # Riskiest first: a run cut short still leaves the worst findings fixed.
+    for triage_result in by_risk(triage_results):
         finding = triage_result.finding
-        if triage_result.route == "review":
-            record(triage_result, "sent to review")
-            continue
-        if triage_result.route != "fix":
+        # Every finding that isn't a confirmed false positive gets a fix
+        # attempt. "review" used to skip the fix; now the validator is the
+        # gate: a fix that doesn't validate is never committed.
+        if triage_result.route not in ("fix", "review"):
             record(triage_result, "rejected (likely false positive)")
             continue
 
@@ -281,7 +290,7 @@ def run_pipeline(
             # rules flagging the same SQL string); don't spend LLM time on it.
             with timed(timings, "fix + rescan loop"):
                 still_there = count_same_rule_and_file(
-                    finding, scan(target_repo, cfg.semgrep_rulesets)
+                    finding, scan(target_repo, cfg.semgrep_rulesets, cfg.engines)
                 )
             if still_there < remaining[rule_file_key]:
                 remaining[rule_file_key] = still_there
@@ -296,17 +305,21 @@ def run_pipeline(
             continue
 
         with timed(timings, "fix + rescan loop"):
+            note = history_note(finding_history(history, repo_full_name, finding))
             fix_result = fix_finding(
                 with_all_rules(finding, findings), ollama, repo, model=cfg.fix_models[0],
+                history=note,
             )
             validation_result = validate_and_retry(
                 fix_result, ollama, repo, target_repo,
                 cfg.semgrep_rulesets, cfg.max_fix_retries,
+                engines=cfg.engines,
                 baseline_count=remaining[rule_file_key],
                 base_branch=base_branch,
                 review=cfg.fix_review,
                 known_rules={f.rule_id for f in findings if f.file == finding.file},
                 fix_models=cfg.fix_models,
+                history=note,
                 retriage=lambda f: triage_finding(
                     f, ollama, laya, cfg.threshold_fix, cfg.threshold_review,
                     max_rounds=cfg.triage_max_rounds,
@@ -335,7 +348,7 @@ def run_pipeline(
     # Final whole-repo rescan with every validated fix in place: what's left
     # is exactly what this run did NOT fix.
     with timed(timings, "final rescan"):
-        report.residual = scan(target_repo, cfg.semgrep_rulesets)
+        report.residual = scan(target_repo, cfg.semgrep_rulesets, cfg.engines)
     print(f"Final rescan: {len(report.residual)} finding(s) remain.")
     for f in report.residual:
         print(f"  - {f.file}:{f.line} {f.cwe} ({f.rule_id})")
@@ -416,7 +429,7 @@ def run_pipeline(
 
 def cmd_fix(args):
     cfg = load_config(args.config)
-    findings = scan(args.target_repo, cfg.semgrep_rulesets)
+    findings = scan(args.target_repo, cfg.semgrep_rulesets, cfg.engines)
     ollama = OllamaClient(host=cfg.ollama_host, model=cfg.ollama_model)
     laya = LayaClient(model=cfg.laya_model)
     repo = git.Repo(args.target_repo)

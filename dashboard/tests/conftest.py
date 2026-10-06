@@ -22,7 +22,7 @@ def finding(fp, line, cwe, severity, route, outcome, validated=False, attempts=N
     return {
         "fingerprint": fp,
         "finding": {"file": "app.py", "line": line, "rule_id": f"rule.{fp}", "cwe": cwe,
-                    "message": "m", "snippet": "code", "severity": severity,
+                    "message": "m", "snippet": f"code {fp}", "severity": severity,
                     "owasp": ["A03:2021 - Injection"], "end_line": line},
         "triage": {"laya_score": score, "route": route, "llm_label": "tp", "rounds": 1,
                    "context": f"{line - 1} | before\n{line} | flagged()\n{line + 1} | after",

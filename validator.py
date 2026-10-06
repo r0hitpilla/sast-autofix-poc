@@ -7,6 +7,7 @@ import pyflakes.messages
 
 from code_context import dependency_summary
 from fix_review import file_diff, review_fix
+from hallucination import check_references
 from fixer import fix_finding, remove_created, restore_file
 from models import Finding, FixResult, ValidationResult
 from scanner import scan
@@ -123,8 +124,9 @@ def _check(
     baseline_content: str | None = None,
     known_rules: set | None = None,
     created_files: list[str] | None = None,
+    engines=("semgrep",),
 ):
-    rescanned = scan(target_repo, semgrep_rulesets)
+    rescanned = scan(target_repo, semgrep_rulesets, engines)
     still_present = finding_still_present(finding, rescanned, baseline_count)
     tests_passed, test_output = run_test_suite(target_repo)
     if known_rules is not None:
@@ -146,6 +148,17 @@ def _check(
     broken = new_code_errors(
         finding.file, baseline_content, _read(target_repo, finding.file)
     )
+    # Invented imports and unpublished versions: code that compiles can still
+    # depend on something that does not exist.
+    requirements = _read(target_repo, "requirements.txt") or ""
+    invented = check_references(
+        finding.file, baseline_content, _read(target_repo, finding.file),
+        target_repo, requirements,
+    )
+    for path in created_files or []:
+        invented += check_references(path, None, _read(target_repo, path), target_repo, requirements)
+    if invented:
+        broken = broken + invented
     if broken:
         tests_passed = False
         test_output = (
@@ -268,6 +281,8 @@ def validate_and_retry(
     retriage=None,
     known_rules: set | None = None,
     fix_models: list[str] | None = None,
+    engines=("semgrep",),
+    history: str = "",
 ) -> ValidationResult:
     """Validate an already-applied fix; on failure feed the reason back to the
     LLM for a new fix, up to `max_retries` more attempts.
@@ -296,7 +311,7 @@ def validate_and_retry(
             # Every attempt gets validated, including the last one.
             still_present, tests_passed, test_output, remaining = _check(
                 target_repo, semgrep_rulesets, finding, baseline_count, baseline,
-                known_rules, current_fix.created_files,
+                known_rules, current_fix.created_files, engines,
             )
             _progress(finding, attempts, still_present, tests_passed)
             outcome = _assess(
@@ -317,7 +332,7 @@ def validate_and_retry(
         model = fix_models[attempts % len(fix_models)] if fix_models else None
         current_fix = fix_finding(
             finding, ollama, repo, retry_feedback=feedback, baseline=baseline,
-            model=model, cleanup=current_fix.created_files,
+            model=model, cleanup=current_fix.created_files, history=history,
         )
         attempts += 1
         last_proposal = current_fix.diff or last_proposal

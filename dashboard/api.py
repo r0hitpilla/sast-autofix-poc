@@ -90,6 +90,11 @@ def run(run_id: str, session: Session = Depends(get_session)):
     return detail
 
 
+@app.get("/api/history")
+def history(repository: str = Query(..., max_length=200), session: Session = Depends(get_session)):
+    return {"items": queries.history_for(session, repository)}
+
+
 @app.get("/api/findings")
 def findings(state: str = Query("open", pattern="^(open|all)$"), repository: str | None = Repo,
              severity: str | None = Query(None, pattern="^(Critical|High|Medium|Low)$"),

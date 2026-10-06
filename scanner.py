@@ -2,6 +2,7 @@ import json
 import os
 import subprocess
 
+import external_scanners
 from models import Finding
 
 
@@ -110,6 +111,23 @@ def run_semgrep(target_repo: str, rulesets: list[str]) -> str:
     return result.stdout
 
 
-def scan(target_repo: str, rulesets: list[str]) -> list[Finding]:
-    raw = run_semgrep(target_repo, rulesets)
-    return parse_semgrep_json(raw, target_repo)
+ENGINES = ("semgrep", "gitleaks", "osv")
+
+
+def scan(target_repo: str, rulesets: list[str], engines=("semgrep",)) -> list[Finding]:
+    """Findings from every engine named in `engines`.
+
+    Semgrep is the default so callers that only want SAST keep working. The
+    secret and dependency engines are opt-in via config.yaml `engines`.
+    """
+    unknown = set(engines) - set(ENGINES)
+    if unknown:
+        raise ValueError(f"unknown scanner engine(s): {sorted(unknown)}")
+    findings = []
+    if "semgrep" in engines:
+        findings += parse_semgrep_json(run_semgrep(target_repo, rulesets), target_repo)
+    if "gitleaks" in engines:
+        findings += external_scanners.run_gitleaks(target_repo)
+    if "osv" in engines:
+        findings += external_scanners.run_osv(target_repo)
+    return findings

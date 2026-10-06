@@ -60,13 +60,44 @@ class Run(Base):
     __table_args__ = (Index("ix_runs_repo_branch_started", "repository", "base_branch", "started_at"),)
 
 
+class TrackedFinding(Base):
+    """One record per finding identity (see identity.py), across every run,
+    branch and repository it has appeared in. Rebuilt from the finding rows
+    by tracking.refresh, so re-ingesting a run never double-counts it."""
+    __tablename__ = "tracked_findings"
+
+    fingerprint: Mapped[str] = mapped_column(String(64), primary_key=True)
+    repository: Mapped[str] = mapped_column(Text, index=True)
+    rule_id: Mapped[str] = mapped_column(Text)
+    cwe: Mapped[str] = mapped_column(Text)
+    file: Mapped[str] = mapped_column(Text)
+    first_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    occurrences: Mapped[int] = mapped_column(Integer)      # distinct runs it appeared in
+    severity: Mapped[str] = mapped_column(String(16))
+    cvss: Mapped[float | None] = mapped_column(Float)
+    risk: Mapped[float | None] = mapped_column(Float)
+    # The latest occurrence's state:
+    latest_run_id: Mapped[str] = mapped_column(String(64))
+    route: Mapped[str] = mapped_column(String(16))          # fix | review | reject
+    llm_label: Mapped[str | None] = mapped_column(String(8))
+    laya_score: Mapped[float] = mapped_column(Float)
+    rounds: Mapped[int] = mapped_column(Integer, default=0)  # follow-up questions asked
+    fix_attempts: Mapped[int | None] = mapped_column(Integer)
+    fix_validated: Mapped[bool] = mapped_column(Boolean, default=False)
+    disposition: Mapped[str] = mapped_column(Text)          # the pipeline's outcome text
+    commit: Mapped[str | None] = mapped_column(String(64))
+    pr_number: Mapped[int | None] = mapped_column(Integer)
+    pr_url: Mapped[str | None] = mapped_column(Text)
+
+
 class FindingRow(Base):
     __tablename__ = "findings"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     run_id: Mapped[str] = mapped_column(ForeignKey("runs.id", ondelete="CASCADE"), index=True)
     position: Mapped[int] = mapped_column(Integer)
-    fingerprint: Mapped[str] = mapped_column(String(32), index=True)
+    fingerprint: Mapped[str] = mapped_column(String(64), index=True)
 
     rule_id: Mapped[str] = mapped_column(Text)
     cwe: Mapped[str] = mapped_column(Text)
@@ -75,6 +106,10 @@ class FindingRow(Base):
     file: Mapped[str] = mapped_column(Text)
     line: Mapped[int] = mapped_column(Integer)
     end_line: Mapped[int | None] = mapped_column(Integer)
+    # CVSS base score (dependency advisories) and the pipeline's risk score;
+    # null for runs recorded before these existed.
+    cvss: Mapped[float | None] = mapped_column(Float)
+    risk: Mapped[float | None] = mapped_column(Float, index=True)
     message: Mapped[str] = mapped_column(Text)
     snippet: Mapped[str] = mapped_column(Text)
 

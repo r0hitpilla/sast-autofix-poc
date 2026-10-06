@@ -191,8 +191,10 @@ def test_run_pipeline_summarises_every_finding_outcome(tmp_path, capsys):
 
     out = capsys.readouterr().out.lower()
     assert "scanned: 4 findings" in out
-    assert "fixed and validated: 1" in out
-    assert "sent to review: 1" in out
+    # A "review" finding is no longer skipped: it gets a fix attempt, and the
+    # validator decides whether that fix is accepted.
+    assert "fixed and validated: 2" in out
+    assert "sent to review" not in out
     assert "rejected (likely false positive): 1" in out
     assert "no usable fix from the llm: 1" in out
 
@@ -223,7 +225,7 @@ def test_run_pipeline_writes_report_and_job_summary(tmp_path, monkeypatch):
                      report_dir=str(tmp_path / "out"))
 
     md = (tmp_path / "out" / "sast-autofix-report.md").read_text()
-    assert "| 1 | 1 | 1 | 100% | 0 | 0 | 0 |" in md
+    assert "| 1 rule hit(s), 1 distinct | 1 rule hit(s), 1 distinct | 1 | 100% | 0 | 0 | 0 |" in md
     assert "`app.py:41`" in md
     assert summary.read_text() == md
     assert (tmp_path / "out" / "sast-autofix-report.json").exists()

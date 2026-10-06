@@ -6,7 +6,7 @@ import { useApi } from "../api/useApi";
 import { Shell } from "../components/Shell";
 import { Async, B, Card, DataTable, Empty, FixStatusPill, M, N, PageHead, SeverityPill } from "../components/ui";
 import { carry, useFilters } from "../lib/filters";
-import { pct } from "../lib/format";
+import { dateTime, pct } from "../lib/format";
 
 const SEVERITIES = ["Critical", "High", "Medium", "Low"];
 const ROUTES = [["fix", "True positive"], ["review", "Uncertain"], ["reject", "False positive"]];
@@ -54,13 +54,19 @@ export function Findings() {
                 empty={<Empty>{view === "open" ? "No open findings. Every scanned branch is clean." : "No findings match these filters."}</Empty>}
                 columns={[
                   { header: "Severity", width: ".8fr", cell: (f) => <SeverityPill severity={f.severity} /> },
-                  { header: "Finding", width: "1.3fr", cell: (f) => <B>{f.title}</B> },
+                  { header: "Finding", width: "1.3fr", cell: (f) => <span><B>{f.title}</B>
+                      {f.also_flagged_by?.length ? <span className="mute" style={{ fontSize: 12 }}> · +{f.also_flagged_by.length} rule{f.also_flagged_by.length > 1 ? "s" : ""}</span> : null}</span> },
                   { header: "Repository", width: "1.1fr", cell: (f) => <span>{f.repository}</span> },
                   { header: "Branch", width: ".7fr", cell: (f) => <M>{f.branch}</M> },
                   { header: "File", width: "1.4fr", cell: (f) => <M>{f.file}</M> },
                   { header: "Line", width: ".5fr", cell: (f) => <M>{f.line}</M> },
                   { header: "AI verdict", width: "1fr", cell: (f) => f.verdict },
                   { header: "Confidence", width: ".8fr", cell: (f) => <N>{pct(f.confidence, 0)}</N> },
+                  { header: "Seen", width: "1fr", cell: (f) => f.occurrences == null ? "—" :
+                      <span title={`first ${dateTime(f.first_seen)} · last ${dateTime(f.last_seen)}`}>
+                        <N>{f.occurrences}×</N> <span className="mute">{dateTime(f.last_seen)}</span></span> },
+                  { header: "Risk", width: ".5fr", cell: (f) => <N>{f.risk == null ? "—" : f.risk.toFixed(1)}</N> },
+                  { header: "CVSS", width: ".5fr", cell: (f) => <N>{f.cvss == null ? "—" : f.cvss.toFixed(1)}</N> },
                   { header: "Fix status", width: "1fr", cell: (f) => <FixStatusPill status={f.fix_status} /> },
                 ]} />
               <div className="table-foot"><span>Showing {rows.length} of {d.total}</span></div>
