@@ -20,6 +20,7 @@ from pr import (
     build_pr_body,
     commit_validated_findings,
     open_or_update_pr,
+    set_commit_status,
 )
 from report import FindingRecord, RunReport, write_report
 from scanner import scan
@@ -77,6 +78,22 @@ def triage_all(findings, target_repo, cfg, ollama, laya):
 PROTECTED_PREFIXES = (".github/",)
 
 
+def fix_branch_residual(report: RunReport) -> list:
+    """Findings the final rescan (on the fix branch) still reports, minus the
+    ones Laya rejected as false positives — those never block anything."""
+    rejected = {
+        (r.triage.finding.rule_id, r.triage.finding.file)
+        for r in report.records if r.triage.route == "reject"
+    }
+    return [f for f in report.residual if (f.rule_id, f.file) not in rejected]
+
+
+def run_url(repo_full_name: str) -> str | None:
+    run_id = os.environ.get("GITHUB_RUN_ID")
+    server = os.environ.get("GITHUB_SERVER_URL", "https://github.com")
+    return f"{server}/{repo_full_name}/actions/runs/{run_id}" if run_id else None
+
+
 @contextmanager
 def timed(timings: dict, stage: str):
     start = time.monotonic()
@@ -93,6 +110,7 @@ def run_pipeline(
     report_dir: str = "reports",
     base_branch: str | None = None,
     fix_branch: str | None = None,
+    check_only: bool = False,
 ):
     """Scan the developer's branch (`base_branch`, e.g. SV) as a whole repo
     and propose fixes on `fix_branch` (default "<base>-fix") via a PR into
@@ -124,6 +142,7 @@ def run_pipeline(
         "sent to review": 0,
         "sent to review (CI/workflow file, never auto-fixed)": 0,
         "rejected (likely false positive)": 0,
+        "confirmed (check only, not fixed)": 0,
         "skipped (file not found in target repo)": 0,
         "resolved by an earlier fix": 0,
         "no usable fix from the llm": 0,
@@ -146,6 +165,21 @@ def run_pipeline(
 
     with timed(timings, "triage (Laya + LLM)"):
         triage_results = triage_all(findings, target_repo, cfg, ollama, laya)
+
+    if check_only:
+        # Used on fix branches (SV-fix): report and gate, but never generate
+        # fixes — that would mean a SV-fix-fix branch and a loop.
+        for t in triage_results:
+            record(t, {
+                "fix": "confirmed (check only, not fixed)",
+                "review": "sent to review",
+            }.get(t.route, "rejected (likely false positive)"))
+        print(f"\nCheck only — scanned: {len(findings)} findings.")
+        for label, count in outcomes.items():
+            if count:
+                print(f"  {label.capitalize()}: {count}")
+        print("Report:", write_report(report, report_dir))
+        return report
 
     entries = []
     for triage_result in triage_results:
@@ -268,6 +302,20 @@ def run_pipeline(
         github_client, repo_full_name, head=fix_branch, base=base_branch,
         title=title, body=body, line_comments=comments,
     )
+
+    # The bot's push of SV-fix doesn't trigger a workflow run of its own
+    # (GitHub never does for pushes made with the Actions token), but this
+    # run already rescanned SV-fix: publish that as the fix commit's check.
+    remaining = fix_branch_residual(report)
+    set_commit_status(
+        github_client, repo_full_name, repo.head.commit.hexsha,
+        state="failure" if remaining else "success",
+        description=(
+            f"Rescan of {fix_branch}: {len(remaining)} confirmed finding(s) remain"
+            if remaining else f"Rescan of {fix_branch}: no confirmed findings remain"
+        ),
+        target_url=run_url(repo_full_name),
+    )
     report.pr_urls.append(url)
     print(f"PR: {url}")
     print("Report:", write_report(report, report_dir))
@@ -292,7 +340,7 @@ def cmd_fix(args):
 
 def run_and_gate(args):
     report = run_pipeline(args.target_repo, args.config, args.dry_run, args.report_dir,
-                          args.base_branch, args.fix_branch)
+                          args.base_branch, args.fix_branch, args.check_only)
     if args.fail_on_findings and report is not None and report.blocking:
         # The branch itself still contains these until the developer merges
         # the fix PR (or resolves them by hand); fail so a required status
@@ -339,6 +387,9 @@ def build_parser():
                            help="developer branch to scan, e.g. SV (default: current branch)")
     pr_parser.add_argument("--fix-branch", default=None,
                            help="branch to push fixes to (default: <base-branch>-fix)")
+    pr_parser.add_argument("--check-only", action="store_true", default=False,
+                           help="scan, triage, report and gate only; never generate fixes "
+                                "(used for *-fix branches)")
     pr_parser.add_argument("--fail-on-findings", action="store_true", default=False,
                            help="exit 1 if confirmed findings remain on the scanned branch "
                                 "(use as a required status check before merging to main)")
@@ -353,6 +404,9 @@ def build_parser():
                            help="developer branch to scan, e.g. SV (default: current branch)")
     run_parser.add_argument("--fix-branch", default=None,
                            help="branch to push fixes to (default: <base-branch>-fix)")
+    run_parser.add_argument("--check-only", action="store_true", default=False,
+                           help="scan, triage, report and gate only; never generate fixes "
+                                "(used for *-fix branches)")
     run_parser.add_argument("--fail-on-findings", action="store_true", default=False,
                            help="exit 1 if confirmed findings remain on the scanned branch "
                                 "(use as a required status check before merging to main)")

@@ -308,3 +308,22 @@ def open_or_update_pr(
             print(f"[pr warning: inline line comments failed: {exc}]", file=sys.stderr)
 
     return pull.html_url
+
+
+STATUS_CONTEXT = "sast-autofix / fix-branch rescan"
+
+
+def set_commit_status(
+    github_client, repo_full_name: str, sha: str, state: str,
+    description: str, target_url: str | None = None,
+) -> None:
+    """Attach a check to a commit (shown on any PR whose head it is)."""
+    try:
+        commit = github_client.get_repo(repo_full_name).get_commit(sha)
+        kwargs = {"state": state, "description": description[:140], "context": STATUS_CONTEXT}
+        if target_url:
+            kwargs["target_url"] = target_url
+        commit.create_status(**kwargs)
+    except Exception as exc:
+        # The PR and its body are already up; a missing status is cosmetic.
+        print(f"[pr warning: could not set commit status: {exc}]", file=sys.stderr)

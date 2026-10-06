@@ -15,12 +15,16 @@ on:
   push:
     branches-ignore:
       - main        # scan developer branches before they reach main
-      - "**-fix"    # never scan the fix branches this workflow pushes
+    # *-fix branches are scanned too, in check-only mode (see below). The
+    # bot's own push of SV-fix never triggers a run (GitHub doesn't for the
+    # Actions token); that run posts SV-fix's check itself. A developer's
+    # push to SV-fix does trigger one, so hand edits get re-checked.
   workflow_dispatch:
 
 permissions:
   contents: write        # push the <branch>-fix branch
   pull-requests: write   # open the PR and its inline line comments
+  statuses: write        # post the fix-branch rescan result on SV-fix
 
 concurrency:
   # One scan per developer branch at a time; a newer push to the same branch
@@ -58,12 +62,16 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPO: ${{ github.repository }}
         run: |
+          # Fix branches are only checked, never fixed again (no SV-fix-fix).
+          mode=""
+          if [[ "$GITHUB_REF_NAME" == *-fix ]]; then mode="--check-only"; fi
           "$SAST_AUTOFIX_HOME/venv/bin/python" "$SAST_AUTOFIX_HOME/cli.py" \
             --config "$SAST_AUTOFIX_HOME/config.yaml" \
             run --target-repo "$GITHUB_WORKSPACE" \
             --base-branch "$GITHUB_REF_NAME" \
             --report-dir "$RUNNER_TEMP/sast-autofix" \
-            --fail-on-findings
+            --fail-on-findings \
+            $mode
 
       - name: Upload run report
         if: always()

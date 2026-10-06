@@ -309,3 +309,60 @@ def test_merge_gate_passes_when_only_false_positives_remain(tmp_path):
 
     with patch("cli.run_pipeline", return_value=report):
         main(["run", "--target-repo", str(tmp_path), "--fail-on-findings"])  # no SystemExit
+
+
+def test_check_only_mode_triages_and_reports_but_never_fixes(tmp_path, capsys):
+    finding = make_finding()
+    triage_result = TriageResult(finding=finding, llm_reasoning="r", laya_score=0.95, route="fix")
+
+    with patch("cli.load_config", return_value=MagicMock()), \
+         patch("cli.scan", return_value=[finding]), \
+         patch("cli.OllamaClient"), \
+         patch("cli.LayaClient"), \
+         patch("cli.git.Repo", return_value=MagicMock()), \
+         patch("cli.triage_finding", return_value=triage_result), \
+         patch("cli.fix_finding") as mock_fix, \
+         patch("cli.commit_validated_findings") as mock_commit:
+        report = run_pipeline(make_target_repo(tmp_path), "config.yaml", dry_run=True,
+                              base_branch="SV-fix", check_only=True)
+
+    mock_fix.assert_not_called()
+    mock_commit.assert_not_called()
+    assert len(report.blocking) == 1  # still gates
+    assert "confirmed (check only, not fixed): 1" in capsys.readouterr().out.lower()
+
+
+def test_fix_branch_gets_a_status_from_the_final_rescan(tmp_path, monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "t")
+    monkeypatch.setenv("GITHUB_RUN_ID", "42")
+    fixed = make_finding(line=41)
+    rejected = Finding(file="app.py", line=90, rule_id="other.rule", cwe="CWE-1",
+                       message="m", snippet="s")
+    routes = {
+        41: TriageResult(finding=fixed, llm_reasoning="r", laya_score=0.95, route="fix"),
+        90: TriageResult(finding=rejected, llm_reasoning="r", laya_score=0.1, route="reject"),
+    }
+    validation = ValidationResult(finding=fixed, clean=True, test_output="ok", validated=True)
+    mock_repo = MagicMock()
+    mock_repo.head.commit.hexsha = "abc123"
+
+    with patch("cli.load_config", return_value=MagicMock()), \
+         patch("cli.Github"), \
+         patch("cli.scan", side_effect=[[fixed, rejected], [rejected]]), \
+         patch("cli.OllamaClient"), \
+         patch("cli.LayaClient"), \
+         patch("cli.git.Repo", return_value=mock_repo), \
+         patch("cli.triage_finding", side_effect=lambda f, *a, **k: routes[f.line]), \
+         patch("cli.fix_finding", return_value=FixResult(fixed, "d", True, "b")), \
+         patch("cli.validate_and_retry", return_value=validation), \
+         patch("cli.commit_validated_findings", return_value="SV-fix"), \
+         patch("cli.branch_hunks", return_value=[]), \
+         patch("cli.open_or_update_pr", return_value="u"), \
+         patch("cli.set_commit_status") as mock_status:
+        run_pipeline(make_target_repo(tmp_path), "config.yaml", dry_run=False, base_branch="SV")
+
+    args, kwargs = mock_status.call_args
+    assert args[2] == "abc123"
+    # Only a rejected false positive is left on SV-fix -> it passes.
+    assert kwargs["state"] == "success"
+    assert kwargs["target_url"].endswith("/actions/runs/42")
