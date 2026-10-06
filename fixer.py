@@ -5,7 +5,7 @@ import tempfile
 
 from git.exc import GitCommandError
 
-from code_context import numbered_context, numbered_header
+from code_context import dependency_summary, numbered_context, numbered_header
 from git_utils import checkout_branch
 from models import Finding, FixResult
 
@@ -46,7 +46,8 @@ Never reference a file that neither exists nor is created by your reply."""
 
 
 def build_fix_prompt(
-    finding: Finding, retry_feedback: str | None = None, context: str = "", header: str = ""
+    finding: Finding, retry_feedback: str | None = None, context: str = "", header: str = "",
+    dependencies: str = "",
 ) -> str:
     prompt = (
         "You are a security engineer writing a minimal, correct fix for a "
@@ -70,6 +71,12 @@ def build_fix_prompt(
             "\nCurrent file contents around the finding (the number before "
             "each '|' is the line number, not part of the code):\n"
             f"{context}\n"
+        )
+    if dependencies:
+        prompt += (
+            "\nThe project's declared dependencies (plus the Python standard "
+            "library) — use only these, don't add new packages:\n"
+            f"{dependencies}\n"
         )
     prompt += "\n" + EDIT_FORMAT + "\n"
     if retry_feedback:
@@ -286,11 +293,13 @@ def fix_finding(
 
     context = numbered_context(repo.working_tree_dir, finding)
     header = numbered_header(repo.working_tree_dir, finding.file)
+    dependencies = dependency_summary(repo.working_tree_dir)
 
     try:
         extra = {"model": model} if model else {}
         model_output = ollama.generate(
-            build_fix_prompt(finding, retry_feedback, context, header), think=False, **extra
+            build_fix_prompt(finding, retry_feedback, context, header, dependencies),
+            think=False, **extra
         )
     except Exception as exc:
         # Spec: an Ollama call failure must never take the pipeline down —

@@ -49,3 +49,20 @@ def numbered_header(target_repo: str, file: str, max_lines: int = 40) -> str:
         return ""
     width = len(str(last))
     return "\n".join(f"{n:>{width}} | {lines[n - 1]}" for n in range(1, last + 1))
+
+
+DEPENDENCY_FILES = ("requirements.txt", "pyproject.toml", "package.json", "go.mod", "pom.xml")
+
+
+def dependency_summary(target_repo: str, max_chars: int = 1500) -> str:
+    """The repo's declared dependencies, so a fix uses libraries the project
+    actually has (e.g. werkzeug's password hashing ships with Flask) instead
+    of one a reviewer suggested but isn't installed."""
+    parts = []
+    for name in DEPENDENCY_FILES:
+        try:
+            with open(os.path.join(target_repo, name)) as f:
+                parts.append(f"{name}:\n{f.read().strip()[:max_chars]}")
+        except OSError:
+            continue
+    return "\n\n".join(parts)

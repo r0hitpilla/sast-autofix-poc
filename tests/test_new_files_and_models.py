@@ -116,3 +116,28 @@ def test_commit_includes_created_files():
 
     added = [c.args[0] for c in repo.git.add.call_args_list]
     assert added == ["app.py", "templates/welcome.html"]
+
+
+def test_created_file_is_attributed_to_the_fix_that_created_it():
+    from models import Hunk, TriageResult
+    from pr import assign_hunks
+
+    v = ValidationResult(finding=finding(), clean=True, test_output="", validated=True,
+                         fix_diff="+<h1>Hi, {{ name }}!</h1>\n",
+                         created_files=["templates/welcome.html"])
+    hunk = Hunk("templates/welcome.html", 0, 0, 1, 1, added=["<h1>Hi, {{ name }}!</h1>"])
+
+    per_entry, unassigned = assign_hunks([(TriageResult(finding(), "r", 0.9, "fix"), v)], [hunk])
+
+    assert per_entry == [[hunk]] and unassigned == []
+
+
+def test_fix_prompt_lists_the_projects_dependencies(tmp_path):
+    repo = repo_at(tmp_path)
+    (tmp_path / "requirements.txt").write_text("Flask>=3.0.0\n")
+    ollama = MagicMock()
+    ollama.generate.return_value = "no blocks"
+
+    fix_finding(finding(), ollama, repo)
+
+    assert "Flask>=3.0.0" in ollama.generate.call_args.args[0]

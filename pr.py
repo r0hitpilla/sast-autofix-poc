@@ -37,8 +37,9 @@ def assign_hunks(
         # it, not to whichever finding happens to be nearest).
         wanted = {line.strip() for line in hunk.added if line.strip()}
         owners = [
-            i for i, (t, _) in enumerate(validated_entries)
-            if t.finding.file == hunk.file and wanted and wanted <= added[i]
+            i for i, (t, v) in enumerate(validated_entries)
+            if (t.finding.file == hunk.file or hunk.file in v.created_files)
+            and wanted and wanted <= added[i]
         ]
         if len(owners) == 1:
             per_entry[owners[0]].append(hunk)
