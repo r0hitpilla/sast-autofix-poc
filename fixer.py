@@ -28,9 +28,11 @@ without the line-number prefix — just enough to be unique)
 (the replacement lines)
 >>>>>>> FIXED
 
-Use a separate block for each separate place you change (for example, one for
-an import you add and one for the vulnerable code). Every name the new code
-uses must still be defined: do not delete lines other code depends on."""
+Use a separate block for each separate place you change. If you need a new
+import, add it next to the file's existing imports at the top (its own edit
+block), never inside a function, and never re-import a name the file already
+imports. Every name the new code uses must still be defined: do not delete
+lines other code depends on."""
 
 
 def build_fix_prompt(

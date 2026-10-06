@@ -161,3 +161,42 @@ def test_answer_without_verdict_is_capped():
     from triage import summarize_answer
 
     assert len(summarize_answer("x " * 500)) <= 240
+
+
+def test_reject_needs_laya_and_the_llm_to_agree():
+    from triage import decide
+
+    # Laya low but the LLM says it's real -> a human decides; never dropped.
+    assert decide(0.37, "tp", 0.8, 0.4) == "review"
+    # Laya low, LLM gave no label -> a human decides.
+    assert decide(0.2, None, 0.8, 0.4) == "review"
+    # Both say false positive -> reject.
+    assert decide(0.2, "fp", 0.8, 0.4) == "reject"
+
+
+def test_llm_true_positive_plus_unsure_laya_is_fixed():
+    from triage import decide
+
+    assert decide(0.80, "tp", 0.8, 0.4) == "fix"   # the SQLi that went to review
+    assert decide(0.80, None, 0.8, 0.4) == "review"
+    assert decide(0.95, "fp", 0.8, 0.4) == "fix"   # Laya confident overrides
+
+
+def test_llm_label_parses_the_verdict_line():
+    from triage import llm_label
+
+    assert llm_label("blah\nVERDICT: TRUE POSITIVE — unescaped input") == "tp"
+    assert llm_label("**VERDICT:** False positive — constant string") == "fp"
+    assert llm_label("no verdict here") is None
+
+
+def test_triage_rejects_only_when_llm_also_says_false_positive():
+    finding = make_finding()
+    ollama = MagicMock()
+    ollama.generate.return_value = "Exploitable.\nVERDICT: TRUE POSITIVE — raw SQL"
+    laya = MagicMock()
+    laya.assess.return_value = (0.37, None)
+
+    result = triage_finding(finding, ollama, laya, threshold_fix=0.8, threshold_review=0.4)
+
+    assert result.route != "reject"

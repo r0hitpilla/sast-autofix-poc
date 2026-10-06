@@ -66,7 +66,10 @@ def build_reasoning_prompt(finding: Finding, context: str = "") -> str:
         "view might miss, such as input being sanitized earlier in the call "
         "chain, the route being unreachable, or the sink being safe in this "
         "context."
-        + VERDICT_INSTRUCTION
+        "\n\nEnd your answer with exactly one final line, either\n"
+        "VERDICT: TRUE POSITIVE — <one-sentence reason>\n"
+        "or\n"
+        "VERDICT: FALSE POSITIVE — <one-sentence reason>"
     )
 
 
@@ -116,6 +119,37 @@ def build_laya_state(finding: Finding, evidence: list[tuple[str, str]]) -> str:
 
 def format_evidence(evidence: list[tuple[str, str]]) -> str:
     return "\n\n".join(f"**{q}**\n{a}" for q, a in evidence)
+
+
+def llm_label(answer: str) -> str | None:
+    """"tp" / "fp" from the LLM's labelled VERDICT line, or None if it gave none."""
+    verdicts = VERDICT_RE.findall(answer)
+    if not verdicts:
+        return None
+    text = verdicts[-1].upper()
+    if "FALSE POSITIVE" in text:
+        return "fp"
+    if "TRUE POSITIVE" in text:
+        return "tp"
+    return None
+
+
+def decide(
+    score: float, label: str | None, threshold_fix: float, threshold_review: float
+) -> str:
+    """Route a finding, deliberately asymmetric.
+
+    Fixing is cheap to get wrong: every fix is validated and lands in a
+    human-reviewed PR. Rejecting is expensive to get wrong: the finding
+    vanishes from the merge gate. So a fix needs Laya confident, OR the LLM
+    calling it a true positive while Laya is at least unsure; a reject needs
+    Laya AND the LLM to both say false positive. Anything else is review.
+    """
+    if score > threshold_fix or (label == "tp" and score >= threshold_review):
+        return "fix"
+    if score < threshold_review and label == "fp":
+        return "reject"
+    return "review"
 
 
 def route(score: float, threshold_fix: float, threshold_review: float) -> str:
@@ -216,6 +250,6 @@ def triage_finding(
         finding=finding,
         llm_reasoning=format_evidence(evidence),
         laya_score=score,
-        route=route(score, threshold_fix, threshold_review),
+        route=decide(score, llm_label(initial), threshold_fix, threshold_review),
         evidence=evidence,
     )

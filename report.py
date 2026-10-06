@@ -66,7 +66,7 @@ def to_markdown(report: RunReport) -> str:
     lines = [
         f"# SAST Autofix run: `{report.target}`",
         "",
-        "| Findings scanned | Confirmed true positives | Fixed & validated | Fix rate | Needs human review | Rejected as false positive | Remaining after rescan |",
+        "| Findings scanned | Confirmed true positives | Fixed & validated | Fix rate | Needs human review | Rejected as false positive | Still flagged after the fixes |",
         "|---|---|---|---|---|---|---|",
         f"| {total} | {report.confirmed} | {report.fixed} | {fix_rate} | {review} | {rejected} | {len(report.residual)} |",
         "",
@@ -75,8 +75,9 @@ def to_markdown(report: RunReport) -> str:
         lines += ["**Pull requests:** " + ", ".join(report.pr_urls), ""]
     if report.blocking:
         lines += [
-            f"**Merge gate: ❌ {len(report.blocking)} confirmed finding(s) are still on "
-            "this branch.** Merge the fix PR (and resolve anything it lists as not "
+            f"**Merge gate: ❌ {len(report.blocking)} confirmed or unreviewed finding(s) "
+            "are still on this branch** (fixes for some may already be on the fix "
+            "branch — they count until merged here). Merge the fix PR (and resolve anything it lists as not "
             "auto-fixed); the rescan of that push will clear this check.",
             "",
         ]

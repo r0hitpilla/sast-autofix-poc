@@ -15,4 +15,6 @@ def test_generate_returns_message_content():
         instance.chat.assert_called_once_with(
             model="test-model",
             messages=[{"role": "user", "content": "say hi"}],
+            # Deterministic: the same code must get the same triage answers.
+            options={"temperature": 0, "seed": 42},
         )
