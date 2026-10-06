@@ -1,0 +1,437 @@
+"""Read models for the dashboard. Every number the UI shows is defined here.
+
+Definitions (kept in one place so the UI, exports and tests agree):
+- latest run of a branch: the most recent non-dry-run run for (repository, base_branch)
+- open finding: a finding routed `fix` or `review` in the latest run of its
+  branch — exactly what that branch's merge gate is blocking on
+- autofix success: validated fixes / confirmed findings, over runs in the window
+- run status: "Passed" (gate green) | "Fix PR open" (fixes proposed, gate still
+  red) | "Blocked" (gate red, nothing auto-fixed) | "Checked" (check-only run)
+"""
+
+import re
+from collections import Counter, defaultdict
+from datetime import datetime, timedelta, timezone
+
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session, selectinload
+
+from .db import FindingRow, Run
+
+SEVERITIES = ["Critical", "High", "Medium", "Low"]
+OPEN_ROUTES = ("fix", "review")
+
+
+# ---- small helpers ---------------------------------------------------------
+
+def now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def aware(dt: datetime | None) -> datetime | None:
+    """SQLite returns naive datetimes; treat them as UTC like PostgreSQL does."""
+    if dt is not None and dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def iso(dt: datetime | None) -> str | None:
+    dt = aware(dt)
+    return dt.isoformat() if dt else None
+
+
+def cwe_id(cwe: str) -> str:
+    return cwe.split(":", 1)[0].strip()
+
+
+def cwe_title(cwe: str) -> str:
+    """"CWE-89: Improper ... ('SQL Injection')" -> "SQL Injection"."""
+    m = re.search(r"\('([^']+)'\)", cwe)
+    if m:
+        return m.group(1)
+    rest = cwe.split(":", 1)[1].strip() if ":" in cwe else cwe
+    return rest[:60] or cwe
+
+
+def duration_seconds(run: Run) -> float | None:
+    if run.started_at and run.finished_at:
+        return (aware(run.finished_at) - aware(run.started_at)).total_seconds()
+    return None
+
+
+def run_status(run: Run) -> str:
+    if run.mode == "check-only":
+        return "Checked"
+    if run.gate_passed:
+        return "Passed"
+    return "Fix PR open" if run.fixed else "Blocked"
+
+
+def fix_status(row: FindingRow) -> str:
+    if row.route == "reject":
+        return "False positive"
+    if row.route == "review":
+        return "Needs review"
+    if row.fix_validated:
+        return "Fixed"
+    if row.outcome.startswith("resolved by"):
+        return "Fixed"
+    return "Not fixed"
+
+
+def verdict(row: FindingRow) -> str:
+    return {"fix": "True positive", "review": "Uncertain", "reject": "False positive"}.get(row.route, row.route)
+
+
+# ---- runs ------------------------------------------------------------------
+
+def run_summary(run: Run) -> dict:
+    return {
+        "id": run.id, "repository": run.repository, "base_branch": run.base_branch,
+        "fix_branch": run.fix_branch, "commit": run.commit, "trigger": run.trigger,
+        "mode": run.mode, "url": run.url,
+        "started_at": iso(run.started_at), "finished_at": iso(run.finished_at),
+        "duration_s": duration_seconds(run),
+        "scanned": run.scanned, "confirmed": run.confirmed, "fixed": run.fixed,
+        "review": run.review, "rejected": run.rejected, "residual": run.residual,
+        "blocking": run.blocking, "gate_passed": run.gate_passed,
+        "status": run_status(run),
+        "pr_number": run.pr_number, "pr_url": run.pr_url,
+        "fix_branch_state": run.fix_branch_state,
+    }
+
+
+def _real_runs():
+    return select(Run).where(Run.dry_run.is_(False))
+
+
+def _filtered(stmt, repository: str | None, since: datetime | None):
+    if repository:
+        stmt = stmt.where(Run.repository == repository)
+    if since:
+        stmt = stmt.where(Run.started_at >= since)
+    return stmt
+
+
+def list_runs(session: Session, repository=None, since=None, limit=50, offset=0) -> dict:
+    base = _filtered(_real_runs(), repository, since)
+    total = session.scalar(select(func.count()).select_from(base.subquery()))
+    rows = session.scalars(base.order_by(Run.started_at.desc()).limit(limit).offset(offset)).all()
+    return {"total": total, "items": [run_summary(r) for r in rows]}
+
+
+def latest_runs(session: Session, repository=None, as_of: datetime | None = None) -> list[Run]:
+    """Latest real run of each (repository, base_branch), optionally as of a time."""
+    stmt = _real_runs()
+    if repository:
+        stmt = stmt.where(Run.repository == repository)
+    if as_of:
+        stmt = stmt.where(Run.started_at <= as_of)
+    latest: dict[tuple, Run] = {}
+    for run in session.scalars(stmt.order_by(Run.started_at.asc())).all():
+        latest[(run.repository, run.base_branch)] = run
+    return list(latest.values())
+
+
+def open_findings(session: Session, repository=None, as_of=None) -> list[FindingRow]:
+    ids = [r.id for r in latest_runs(session, repository, as_of)]
+    if not ids:
+        return []
+    stmt = (select(FindingRow).where(FindingRow.run_id.in_(ids), FindingRow.route.in_(OPEN_ROUTES))
+            .options(selectinload(FindingRow.run)))
+    return list(session.scalars(stmt).all())
+
+
+STAGES = [  # (timing key written by the pipeline, display name)
+    ("scan", "Scan"),
+    ("triage (Laya + LLM)", "Triage"),
+    ("fix + rescan loop", "Fix & validate"),
+    ("final rescan", "Final rescan"),
+]
+
+
+def stage_text(run: Run, key: str) -> str:
+    if key == "scan":
+        return f"Semgrep scanned the repository and reported {run.scanned} finding(s)."
+    if key.startswith("triage"):
+        return (f"The LLM investigated each finding and Laya decided: {run.confirmed} confirmed, "
+                f"{run.review} sent to review, {run.rejected} rejected as false positives.")
+    if key.startswith("fix"):
+        return (f"{run.fixed} fix(es) passed every check: Semgrep rescan, no new findings, "
+                "broken-code check, the project's tests and an AI security review.")
+    return (f"{run.residual} finding(s) still flagged on the fix branch. "
+            + ("Merge gate passed." if run.gate_passed else f"Merge gate blocked on {run.blocking}."))
+
+
+def run_detail(session: Session, run_id: str) -> dict | None:
+    run = session.get(Run, run_id, options=[selectinload(Run.findings)])
+    if run is None:
+        return None
+    stages = [
+        {"key": key, "name": name, "seconds": run.timings.get(key), "text": stage_text(run, key)}
+        for key, name in STAGES if key in run.timings
+    ]
+    fixed = [r for r in run.findings if r.fix_validated]
+    return {
+        **run_summary(run),
+        "stages": stages,
+        "provenance": run.provenance,
+        "fix_branch_description": run.fix_branch_description,
+        "patches": [
+            {"finding_id": r.id, "title": cwe_title(r.cwe), "cwe": cwe_id(r.cwe), "file": r.file,
+             "line": r.line, "diff": (r.fix or {}).get("diff"), "attempts": r.fix_attempts,
+             "created_files": (r.fix or {}).get("created_files", []),
+             "note": (r.fix or {}).get("note")}
+            for r in fixed
+        ],
+        "findings": [finding_summary(r, run) for r in run.findings],
+    }
+
+
+# ---- findings --------------------------------------------------------------
+
+def finding_summary(row: FindingRow, run: Run | None = None) -> dict:
+    run = run or row.run
+    return {
+        "id": row.id, "run_id": row.run_id, "fingerprint": row.fingerprint,
+        "severity": row.severity, "title": cwe_title(row.cwe), "cwe": cwe_id(row.cwe),
+        "rule_id": row.rule_id, "repository": run.repository, "branch": run.base_branch,
+        "file": row.file, "line": row.line, "verdict": verdict(row), "route": row.route,
+        "confidence": row.laya_score, "fix_status": fix_status(row), "outcome": row.outcome,
+        "detected_at": iso(run.started_at),
+    }
+
+
+def list_findings(session: Session, state="open", repository=None, severity=None,
+                  route=None, since=None, limit=100, offset=0) -> dict:
+    if state == "open":
+        rows = open_findings(session, repository)
+    else:
+        stmt = (select(FindingRow).join(Run).where(Run.dry_run.is_(False))
+                .options(selectinload(FindingRow.run)))
+        stmt = _filtered(stmt, repository, since)
+        rows = list(session.scalars(stmt).all())
+    if severity:
+        rows = [r for r in rows if r.severity == severity]
+    if route:
+        rows = [r for r in rows if r.route == route]
+    order = {s: i for i, s in enumerate(SEVERITIES)}
+    rows.sort(key=lambda r: (order.get(r.severity, 9), -(aware(r.run.started_at) or now()).timestamp()))
+    return {"total": len(rows), "items": [finding_summary(r) for r in rows[offset:offset + limit]]}
+
+
+def _parse_context(context: str | None, start: int, end: int) -> list[dict]:
+    lines = []
+    for raw in (context or "").splitlines():
+        num, _, code = raw.partition(" | ")
+        if num.strip().isdigit():
+            n = int(num)
+            lines.append({"n": n, "text": code, "flagged": start <= n <= end})
+    return lines
+
+
+def finding_detail(session: Session, finding_id: int) -> dict | None:
+    row = session.get(FindingRow, finding_id, options=[selectinload(FindingRow.run)])
+    if row is None:
+        return None
+    run = row.run
+    seen = session.execute(
+        select(func.min(Run.started_at), func.max(Run.started_at), func.count(Run.id))
+        .join(FindingRow).where(FindingRow.fingerprint == row.fingerprint, Run.dry_run.is_(False))
+    ).one()
+    evidence = row.evidence or []
+    return {
+        **finding_summary(row, run),
+        "message": row.message, "owasp": row.owasp, "end_line": row.end_line,
+        "snippet": row.snippet,
+        "code": _parse_context(row.context, row.line, row.end_line or row.line),
+        "commit": run.commit, "run_url": run.url, "pr_number": run.pr_number, "pr_url": run.pr_url,
+        "first_detected": iso(seen[0]), "last_detected": iso(seen[1]), "times_detected": seen[2],
+        "investigation": {
+            "llm_label": row.llm_label, "laya_score": row.laya_score, "rounds": row.rounds,
+            "max_rounds": run.provenance.get("triage_max_rounds"),
+            "initial": evidence[0]["answer"] if evidence else None,
+            "questions": [
+                {"key": e.get("key"), "question": e["question"], "answer": e["answer"]}
+                for e in evidence[1:]
+            ],
+        },
+        "fix": row.fix,
+        "provenance": run.provenance,
+    }
+
+
+# ---- pull requests ---------------------------------------------------------
+
+def list_prs(session: Session, repository=None) -> list[dict]:
+    stmt = _real_runs().where(Run.pr_number.is_not(None))
+    if repository:
+        stmt = stmt.where(Run.repository == repository)
+    by_pr: dict[tuple, Run] = {}
+    for run in session.scalars(stmt.order_by(Run.started_at.asc())).all():
+        by_pr[(run.repository, run.pr_number)] = run  # latest run that touched the PR
+    gate = {(r.repository, r.base_branch): r for r in latest_runs(session, repository)}
+    out = []
+    for (repo, number), run in sorted(by_pr.items(), key=lambda kv: -kv[0][1]):
+        base_gate = gate.get((repo, run.base_branch))
+        out.append({
+            "number": number, "url": run.pr_url, "repository": repo,
+            "head": run.fix_branch, "base": run.base_branch, "run_id": run.id,
+            "findings": run.scanned, "fixes": run.fixed,
+            "validation": run.fix_branch_state,  # status posted on the fix branch
+            "gate_passed": base_gate.gate_passed if base_gate else None,
+            "updated_at": iso(run.finished_at or run.started_at),
+        })
+    return out
+
+
+def pr_detail(session: Session, repository: str, number: int) -> dict | None:
+    run = session.scalars(
+        _real_runs().where(Run.repository == repository, Run.pr_number == number)
+        .order_by(Run.started_at.desc()).limit(1).options(selectinload(Run.findings))
+    ).first()
+    if run is None:
+        return None
+    base_gate = next((r for r in latest_runs(session, repository) if r.base_branch == run.base_branch), None)
+    return {
+        "number": number, "url": run.pr_url, "repository": repository,
+        "head": run.fix_branch, "base": run.base_branch, "run": run_summary(run),
+        "summary": {"scanned": run.scanned, "confirmed": run.confirmed, "fixed": run.fixed,
+                    "review": run.review, "rejected": run.rejected},
+        "validation": {"state": run.fix_branch_state, "description": run.fix_branch_description},
+        "gate": {"passed": base_gate.gate_passed if base_gate else None,
+                 "blocking": base_gate.blocking if base_gate else None,
+                 "run_id": base_gate.id if base_gate else None},
+        "findings": [finding_summary(r, run) for r in run.findings],
+    }
+
+
+# ---- overview & reports ----------------------------------------------------
+
+def _window(days: int) -> tuple[datetime, datetime]:
+    end = now()
+    return end - timedelta(days=days), end
+
+
+def _runs_between(session, repository, start, end=None) -> list[Run]:
+    stmt = _filtered(_real_runs(), repository, start)
+    if end:
+        stmt = stmt.where(Run.started_at < end)
+    return list(session.scalars(stmt.options(selectinload(Run.findings))).all())
+
+
+def _rate(num: int, den: int) -> float | None:
+    return round(num / den, 4) if den else None
+
+
+def overview(session: Session, repository=None, days=7) -> dict:
+    start, end = _window(days)
+    prev_start = start - (end - start)
+    runs, prev_runs = _runs_between(session, repository, start), _runs_between(session, repository, prev_start, start)
+    open_now, open_prev = open_findings(session, repository), open_findings(session, repository, as_of=start)
+
+    def sev_counts(rows):
+        c = Counter(r.severity for r in rows)
+        return {s: c.get(s, 0) for s in SEVERITIES}
+
+    sev_now, sev_prev = sev_counts(open_now), sev_counts(open_prev)
+    confirmed, fixed = sum(r.confirmed for r in runs), sum(r.fixed for r in runs)
+    p_confirmed, p_fixed = sum(r.confirmed for r in prev_runs), sum(r.fixed for r in prev_runs)
+    durations = [d for d in (duration_seconds(r) for r in runs) if d]
+    latest = latest_runs(session, repository)
+
+    activity = []
+    for run in sorted(runs, key=lambda r: aware(r.started_at), reverse=True)[:10]:
+        for row in run.findings:
+            if row.route in OPEN_ROUTES or row.fix_validated:
+                activity.append({"finding_id": row.id, "at": iso(run.finished_at or run.started_at),
+                                 "title": cwe_title(row.cwe), "status": fix_status(row),
+                                 "where": f"{row.file}:{row.line}", "pr_number": run.pr_number,
+                                 "repository": run.repository})
+    repos = defaultdict(list)
+    for run in latest:
+        repos[run.repository].append(run)
+
+    return {
+        "window_days": days,
+        "kpis": {
+            "open_findings": len(open_now), "open_findings_prev": len(open_prev),
+            "critical": sev_now["Critical"], "high": sev_now["High"],
+            "critical_prev": sev_prev["Critical"], "high_prev": sev_prev["High"],
+            "autofix_success": _rate(fixed, confirmed), "autofix_success_prev": _rate(p_fixed, p_confirmed),
+            "fixed": fixed, "fixed_prev": p_fixed,
+            "avg_run_seconds": round(sum(durations) / len(durations), 1) if durations else None,
+            "blocked_branches": sum(1 for r in latest if r.mode == "fix" and not r.gate_passed),
+            "runs": len(runs),
+        },
+        "posture": [{"severity": s, "count": sev_now[s], "prev": sev_prev[s]} for s in SEVERITIES],
+        "activity": activity[:8],
+        "repositories": [
+            {"repository": repo,
+             "open_findings": sum(r.blocking for r in rs),
+             "critical": sum(1 for r in rs for f in r.findings
+                             if f.route in OPEN_ROUTES and f.severity == "Critical"),
+             "branches": len(rs),
+             "last_scan": iso(max(aware(r.started_at) for r in rs)),
+             "status": "Healthy" if all(r.gate_passed for r in rs) else "Blocked"}
+            for repo, rs in sorted(repos.items())
+        ],
+        "recent_runs": [run_summary(r) for r in sorted(runs, key=lambda r: aware(r.started_at), reverse=True)[:6]],
+    }
+
+
+def report(session: Session, repository=None, days=30) -> dict:
+    start, _ = _window(days)
+    runs = _runs_between(session, repository, start)
+    rows = [f for r in runs for f in r.findings]
+    scanned, confirmed = len(rows), sum(1 for f in rows if f.route == "fix")
+    fixed = sum(1 for f in rows if f.fix_validated)
+    attempted = [f for f in rows if f.fix_attempts]
+    failed_attempts = sum((f.fix_attempts or 0) - (1 if f.fix_validated else 0) for f in attempted)
+    total_attempts = sum(f.fix_attempts or 0 for f in attempted)
+    durations = [d for d in (duration_seconds(r) for r in runs) if d]
+
+    def bars(counter: Counter, n=6):
+        return [{"label": k, "value": v} for k, v in counter.most_common(n)]
+
+    buckets = Counter()
+    for f in rows:
+        s = f.laya_score
+        buckets["90–100%" if s >= .9 else "80–89%" if s >= .8 else "70–79%" if s >= .7 else "< 70%"] += 1
+    return {
+        "window_days": days,
+        "kpis": {
+            "runs": len(runs), "findings": scanned,
+            "autofix_success": _rate(fixed, confirmed),
+            "false_positive_rate": _rate(sum(1 for f in rows if f.route == "reject"), scanned),
+            "fix_attempt_failure_rate": _rate(failed_attempts, total_attempts),
+            "avg_run_seconds": round(sum(durations) / len(durations), 1) if durations else None,
+            "blocked_runs": sum(1 for r in runs if r.mode == "fix" and not r.gate_passed),
+        },
+        "charts": {
+            "by_cwe": bars(Counter(cwe_id(f.cwe) for f in rows)),
+            "by_repository": bars(Counter(r.repository for r in runs for _ in r.findings)),
+            "confidence": [{"label": k, "value": buckets.get(k, 0)}
+                           for k in ("90–100%", "80–89%", "70–79%", "< 70%")],
+            "by_severity": [{"label": s, "value": sum(1 for f in rows if f.severity == s)} for s in SEVERITIES],
+        },
+    }
+
+
+def export_rows(session: Session, repository=None, days=30) -> list[dict]:
+    start, _ = _window(days)
+    out = []
+    for run in _runs_between(session, repository, start):
+        for f in run.findings:
+            out.append({
+                "run_id": run.id, "repository": run.repository, "branch": run.base_branch,
+                "started_at": iso(run.started_at), "severity": f.severity, "cwe": cwe_id(f.cwe),
+                "title": cwe_title(f.cwe), "rule_id": f.rule_id, "file": f.file, "line": f.line,
+                "verdict": verdict(f), "laya_score": f.laya_score, "fix_status": fix_status(f),
+                "fix_attempts": f.fix_attempts, "fingerprint": f.fingerprint,
+            })
+    return out
+
+
+def repositories(session: Session) -> list[str]:
+    return list(session.scalars(select(Run.repository).distinct().order_by(Run.repository)).all())

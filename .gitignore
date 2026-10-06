@@ -6,3 +6,4 @@ __pycache__/
 sample_vuln_app/
 .pytest_cache/
 reports/
+.venv/

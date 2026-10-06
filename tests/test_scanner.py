@@ -90,3 +90,28 @@ def test_local_rule_ids_drop_the_filesystem_prefix():
     assert clean_rule_id("python.flask.security.injection.tainted-sql-string") == (
         "python.flask.security.injection.tainted-sql-string"
     )
+
+
+def test_severity_follows_semgreps_impact_and_likelihood():
+    from scanner import severity_of
+
+    assert severity_of({"metadata": {"impact": "HIGH", "likelihood": "HIGH"}}) == "Critical"
+    assert severity_of({"metadata": {"impact": "HIGH", "likelihood": "LOW"}}) == "High"
+    assert severity_of({"metadata": {"impact": "MEDIUM", "likelihood": "HIGH"}}) == "High"
+    assert severity_of({"metadata": {"impact": "MEDIUM", "likelihood": "LOW"}}) == "Medium"
+    assert severity_of({"metadata": {"impact": "LOW", "likelihood": "HIGH"}}) == "Low"
+    # no risk model -> Semgrep's basic severity
+    assert severity_of({"severity": "ERROR", "metadata": {}}) == "High"
+    assert severity_of({"severity": "INFO"}) == "Low"
+    assert severity_of({}) == "Medium"
+
+
+def test_parse_keeps_owasp_and_end_line(tmp_path):
+    (tmp_path / "a.py").write_text("x = 1\ny = 2\n")
+    raw = json.dumps({"results": [{
+        "path": "a.py", "check_id": "r", "start": {"line": 1}, "end": {"line": 2},
+        "extra": {"message": "m", "severity": "WARNING",
+                  "metadata": {"owasp": ["A03:2021 - Injection"], "impact": "HIGH", "likelihood": "HIGH"}},
+    }]})
+    [f] = parse_semgrep_json(raw, str(tmp_path))
+    assert (f.severity, f.owasp, f.end_line) == ("Critical", ["A03:2021 - Injection"], 2)

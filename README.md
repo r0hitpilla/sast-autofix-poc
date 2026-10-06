@@ -93,6 +93,35 @@ The same flow locally:
 The workflow deliberately does not run on `pull_request`. On a public repo
 that would let pull requests from forks run code on your self-hosted runner.
 
+## Dashboard
+
+A web UI over every run the pipeline records: overview KPIs, findings with
+Laya's investigation, runs with stage timings and patches, fix PRs with merge
+gate state, models, system health and exportable reports.
+
+- **Backend:** `dashboard/` (FastAPI + SQLAlchemy + Alembic, PostgreSQL). It has
+  its own venv: FastAPI needs a newer `opentelemetry-api` than Semgrep allows.
+- **Frontend:** `ui/web/` (React + TypeScript + Vite), served by the backend.
+- **Data:** the CI workflow's "Record run in the dashboard" step ingests each
+  run's `sast-autofix-report.json` (schema v2, see `report.py`).
+
+One-time setup on the DGX Spark:
+
+    sudo -u postgres createuser $USER && sudo -u postgres createdb -O $USER sast_autofix
+    python3 -m venv dashboard/.venv && dashboard/.venv/bin/pip install -r dashboard/requirements.txt
+    (cd ui/web && npm ci && npm run build)
+    dashboard/.venv/bin/alembic -c dashboard/alembic.ini upgrade head
+    # then install deploy/sast-autofix-dashboard.service (instructions inside)
+
+Phase 1 has **no sign-in**, so it listens on `127.0.0.1:8710` only. From your
+laptop: `ssh -L 8710:127.0.0.1:8710 <user>@<dgx-host>`, then open
+http://localhost:8710. Don't expose it beyond loopback until sign-in and
+role-based access ship (phase 2).
+
+Development: `dashboard/.venv/bin/uvicorn dashboard.api:app --port 8710 --reload`
+and `cd ui/web && npm run dev` (http://127.0.0.1:5710, proxies `/api`).
+Tests: `dashboard/.venv/bin/python -m pytest dashboard/tests` and `cd ui/web && npm test`.
+
 ## Trust model / prompt-injection surface
 
 This tool feeds source code from the scanned repository straight into a local

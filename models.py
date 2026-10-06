@@ -9,6 +9,10 @@ class Finding:
     cwe: str
     message: str
     snippet: str
+    # Critical | High | Medium | Low — see scanner.severity_of.
+    severity: str = "Medium"
+    owasp: list[str] = field(default_factory=list)
+    end_line: int | None = None
 
 
 @dataclass
@@ -20,6 +24,8 @@ class TriageResult:
     # The (question, LLM answer) evidence Laya gathered before concluding,
     # in the order Laya asked for it.
     evidence: list[tuple[str, str]] = field(default_factory=list)
+    # The numbered source the LLM was shown (for review UIs; "" if unread).
+    context: str = ""
 
 
 @dataclass

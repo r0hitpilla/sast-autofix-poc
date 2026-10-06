@@ -73,6 +73,19 @@ jobs:
             --fail-on-findings \
             $mode
 
+      - name: Record run in the dashboard
+        # Runs even when the merge gate failed the scan step. Non-fatal: a
+        # dashboard problem must never fail a security scan.
+        if: always()
+        continue-on-error: true
+        run: |
+          report="$RUNNER_TEMP/sast-autofix/sast-autofix-report.json"
+          if [ -f "$report" ] && [ -x "$SAST_AUTOFIX_HOME/dashboard/.venv/bin/python" ]; then
+            cd "$SAST_AUTOFIX_HOME" && dashboard/.venv/bin/python -m dashboard.ingest "$report"
+          else
+            echo "No report or no dashboard install; skipping."
+          fi
+
       - name: Upload run report
         if: always()
         # The report is also on the job summary page; a full artifact

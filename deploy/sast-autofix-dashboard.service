@@ -1,0 +1,26 @@
+# systemd *user* unit for the dashboard. Install:
+#   mkdir -p ~/.config/systemd/user
+#   cp deploy/sast-autofix-dashboard.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload && systemctl --user enable --now sast-autofix-dashboard
+#   sudo loginctl enable-linger $USER     # keep it running when you're logged out
+[Unit]
+Description=SAST Autofix dashboard (FastAPI + React)
+After=network-online.target
+
+[Service]
+WorkingDirectory=%h/SAST-AUTOFIX-POC/sast-autofix-poc
+# Phase 1 has no sign-in: listen on loopback only. Reach it via an SSH tunnel.
+ExecStartPre=%h/SAST-AUTOFIX-POC/sast-autofix-poc/dashboard/.venv/bin/alembic -c dashboard/alembic.ini upgrade head
+ExecStart=%h/SAST-AUTOFIX-POC/sast-autofix-poc/dashboard/.venv/bin/uvicorn dashboard.api:app --host 127.0.0.1 --port 8710 --workers 2 --proxy-headers --no-server-header
+Environment=SAST_DB_URL=postgresql+psycopg:///sast_autofix
+# Optional: read-only GitHub token for live PR state (public repos work without it)
+# Environment=GITHUB_TOKEN=github_pat_...
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadOnlyPaths=%h
+
+[Install]
+WantedBy=default.target

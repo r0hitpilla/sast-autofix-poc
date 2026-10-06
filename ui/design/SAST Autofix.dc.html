@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>body{margin:0}*{box-sizing:border-box}button{font-family:inherit}a{color:#3b4fd8}a:hover{color:#2536a8}</style>
+</helmet>
+<div style="{{ rootStyle }}">
+<sc-if value="{{ !authed }}" hint-placeholder-val="{{ false }}">
+<div style="min-height:100vh;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);background:var(--bg);color:var(--ink);font-family:var(--sans)">
+ <div style="display:flex;align-items:center;justify-content:center;padding:48px">
+  <div style="width:100%;max-width:360px;display:flex;flex-direction:column;gap:20px">
+   <div style="display:flex;align-items:center;gap:10px;font-weight:600;font-size:18px"><span style="width:26px;height:26px;border-radius:7px;background:var(--ink);color:var(--bg);display:grid;place-items:center;font-family:var(--mono);font-size:13px">S</span>SAST Autofix</div>
+   <div><div style="font-size:26px;font-weight:600;letter-spacing:-.02em">Sign in</div><div style="color:var(--mute);font-size:14px;margin-top:6px">Local AI-powered security remediation</div></div>
+   <button onClick="{{ login }}" style="height:40px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--ink);font-size:14px;cursor:pointer">Continue with SSO (SAML)</button>
+   <div style="display:flex;align-items:center;gap:10px;color:var(--mute);font-size:12px"><div style="flex:1;height:1px;background:var(--line)"></div>or<div style="flex:1;height:1px;background:var(--line)"></div></div>
+   <label style="display:flex;flex-direction:column;gap:6px;font-size:12px;color:var(--mute)">Work email<input value="karl.yevingy@acme.io" style="height:40px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--ink);padding:0 12px;font-size:14px;font-family:var(--sans)"></label>
+   <label style="display:flex;flex-direction:column;gap:6px;font-size:12px;color:var(--mute)">Password<input type="password" value="password123" style="height:40px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--ink);padding:0 12px;font-size:14px"></label>
+   <button onClick="{{ login }}" style="height:40px;border-radius:10px;border:0;background:var(--ink);color:var(--bg);font-size:14px;font-weight:500;cursor:pointer">Sign in</button>
+   <div style="font-size:12px;color:var(--mute);line-height:1.5">Self-hosted. Models run locally on your infrastructure. All sign-ins are recorded in the audit log.</div>
+  </div>
+ </div>
+ <div style="background:var(--soft);border-left:1px solid var(--line);padding:48px;display:flex;flex-direction:column;justify-content:center;gap:10px">
+  <div style="font-family:var(--mono);font-size:11px;color:var(--mute);letter-spacing:.08em;text-transform:uppercase;margin-bottom:8px">Remediation lifecycle</div>
+  <sc-for list="{{ lifecycle }}" as="s" hint-placeholder-count="6">
+   <div style="display:flex;align-items:center;gap:14px;font-size:14px"><span style="width:26px;height:26px;border-radius:50%;border:1px solid var(--line);background:var(--card);display:grid;place-items:center;font-family:var(--mono);font-size:11px">{{ s.n }}</span>{{ s.t }}</div>
+  </sc-for>
+ </div>
+</div>
+</sc-if>
+
+<sc-if value="{{ authed }}" hint-placeholder-val="{{ true }}">
+<div style="display:grid;grid-template-columns:232px minmax(0,1fr);height:100vh;background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:13px">
+ <aside style="background:var(--soft);border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0">
+  <div style="padding:18px 16px 10px;display:flex;align-items:center;gap:10px;font-weight:600;font-size:15px"><span style="width:24px;height:24px;border-radius:7px;background:var(--ink);color:var(--bg);display:grid;place-items:center;font-family:var(--mono);font-size:12px">S</span>SAST Autofix</div>
+  <nav style="flex:1;overflow:auto;padding:6px 10px;display:flex;flex-direction:column;gap:2px">
+   <sc-for list="{{ nav }}" as="n" hint-placeholder-count="14">
+    <button onClick="{{ n.go }}" style="{{ n.style }}"><span>{{ n.label }}</span><span style="{{ n.badgeStyle }}">{{ n.badge }}</span></button>
+   </sc-for>
+  </nav>
+  <div style="border-top:1px solid var(--line);padding:12px;display:flex;flex-direction:column;gap:10px">
+   <div style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--mute)"><span style="width:7px;height:7px;border-radius:50%;background:var(--green)"></span>All systems operational</div>
+   <div style="display:flex;align-items:center;gap:10px">
+    <span style="width:30px;height:30px;border-radius:50%;background:var(--ink);color:var(--bg);display:grid;place-items:center;font-size:12px;font-weight:600">KY</span>
+    <div style="flex:1;min-width:0"><div style="font-weight:500">Karl Yevingy</div><div style="font-family:var(--mono);font-size:11px;color:var(--mute)">acme-security</div></div>
+    <button onClick="{{ toggleDark }}" title="Toggle dark mode" style="border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:8px;height:28px;padding:0 8px;cursor:pointer;font-size:12px">{{ themeLabel }}</button>
+   </div>
+  </div>
+ </aside>
+
+ <main style="display:flex;flex-direction:column;min-width:0;min-height:0">
+  <header style="display:flex;align-items:center;gap:12px;padding:12px 24px;border-bottom:1px solid var(--line);flex-wrap:wrap">
+   <div style="font-size:12px;color:var(--mute);display:flex;gap:6px;align-items:center;margin-right:auto"><span>SAST Autofix</span><span>/</span><span style="color:var(--ink)">{{ crumb }}</span></div>
+   <select style="height:32px;border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:8px;padding:0 8px;font-family:var(--mono);font-size:12px"><option>all repositories</option><option>sast-poc-vuln-app</option><option>payments-api</option></select>
+   <select style="height:32px;border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:8px;padding:0 8px;font-size:12px"><option>Last 7 days</option><option>Last 24 hours</option><option>Last 30 days</option></select>
+   <input placeholder="Search findings, repos, runs     ⌘K" style="height:32px;width:240px;border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:8px;padding:0 10px;font-size:12px;font-family:var(--sans)">
+   <select value="{{ role }}" onChange="{{ setRole }}" style="height:32px;border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:8px;padding:0 8px;font-size:12px"><option>Admin</option><option>Security Engineer</option><option>Developer</option><option>Auditor</option></select>
+   <button onClick="{{ goNotifications }}" style="height:32px;border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:8px;padding:0 10px;cursor:pointer;font-size:12px">Notifications <span style="font-family:var(--mono);color:var(--red)">3</span></button>
+  </header>
+
+  <div style="flex:1;overflow:auto;padding:24px;display:flex;flex-direction:column;gap:20px">
+
+  <sc-if value="{{ p.overview }}" hint-placeholder-val="{{ true }}">
+   <div style="display:flex;align-items:flex-end;gap:16px;flex-wrap:wrap">
+    <div style="margin-right:auto"><div style="font-size:24px;font-weight:600;letter-spacing:-.02em">SAST Autofix</div><div style="color:var(--mute);margin-top:4px;font-size:14px">Local AI-powered security remediation</div></div>
+    <button onClick="{{ act.scan }}" style="{{ btnPrimary }}">Run scan</button>
+    <button onClick="{{ act.integ }}" style="{{ btn }}">Create integration</button>
+   </div>
+   <div style="border:1px solid var(--line);border-radius:14px;background:var(--card);padding:14px 16px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+    <sc-for list="{{ lifecycle }}" as="s" hint-placeholder-count="13">
+     <span style="display:inline-flex;align-items:center;gap:6px;font-size:12px;{{ s.pillStyle }}"><span style="font-family:var(--mono);color:var(--mute);font-size:10px">{{ s.n }}</span>{{ s.t }}<span style="color:var(--mute)">{{ s.arrow }}</span></span>
+    </sc-for>
+   </div>
+   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));border:1px solid var(--line);border-radius:14px;background:var(--card);overflow:hidden">
+    <sc-for list="{{ kpis }}" as="k" hint-placeholder-count="6">
+     <div style="padding:16px 18px;border-right:1px solid var(--line);display:flex;flex-direction:column;gap:8px"><div style="color:var(--mute);font-size:12px">{{ k.l }}</div><div style="{{ k.vs }}">{{ k.v }}</div><div style="{{ k.ds }}">{{ k.d }}</div></div>
+    </sc-for>
+   </div>
+   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:20px">
+    <div style="{{ card }}">
+     <div style="{{ cardH }}">Security posture <span style="color:var(--mute);font-weight:400;font-size:12px">vs previous 7 days</span></div>
+     <div style="display:flex;flex-direction:column;gap:14px">
+      <sc-for list="{{ posture }}" as="s" hint-placeholder-count="4">
+       <div style="display:grid;grid-template-columns:70px 1fr 48px 90px;align-items:center;gap:12px"><span style="font-weight:500">{{ s.l }}</span><div style="height:8px;border-radius:4px;background:var(--soft)"><div style="{{ s.bar }}"></div></div><span style="font-family:var(--mono);text-align:right;font-size:15px">{{ s.n }}</span><span style="{{ s.ds }}">{{ s.d }}</span></div>
+      </sc-for>
+     </div>
+    </div>
+    <div style="{{ card }}">
+     <div style="{{ cardH }}">Autofix activity <span style="{{ aiTag }}">AI GENERATED</span></div>
+     <div style="display:flex;flex-direction:column;gap:16px">
+      <sc-for list="{{ activity }}" as="a" hint-placeholder-count="3">
+       <div style="display:grid;grid-template-columns:48px 1fr;gap:12px"><span style="font-family:var(--mono);font-size:12px;color:var(--mute)">{{ a.time }}</span><div><div style="font-weight:500;display:flex;gap:8px;align-items:center">{{ a.t }}<span style="{{ a.pill }}">{{ a.tag }}</span></div><div style="font-family:var(--mono);font-size:12px;color:var(--mute);margin-top:3px">{{ a.f }}</div></div></div>
+      </sc-for>
+     </div>
+    </div>
+   </div>
+   <div style="{{ card }};padding:0">
+    <div style="{{ cardH }};padding:16px 18px 0">Repository health</div>
+    <div style="padding:0 18px 8px"><div style="{{ ov.repos.head }}"><sc-for list="{{ ov.repos.cols }}" as="c" hint-placeholder-count="6"><span>{{ c }}</span></sc-for></div>
+     <sc-for list="{{ ov.repos.rows }}" as="r" hint-placeholder-count="5"><div onClick="{{ r.go }}" style="{{ r.rowStyle }}"><sc-for list="{{ r.cells }}" as="c" hint-placeholder-count="6"><span><span style="{{ c.style }}">{{ c.t }}</span></span></sc-for></div></sc-for></div>
+   </div>
+   <div style="{{ card }};padding:0">
+    <div style="{{ cardH }};padding:16px 18px 0">Recent runs</div>
+    <div style="padding:0 18px 8px"><div style="{{ ov.runs.head }}"><sc-for list="{{ ov.runs.cols }}" as="c" hint-placeholder-count="9"><span>{{ c }}</span></sc-for></div>
+     <sc-for list="{{ ov.runs.rows }}" as="r" hint-placeholder-count="4"><div onClick="{{ r.go }}" style="{{ r.rowStyle }}"><sc-for list="{{ r.cells }}" as="c" hint-placeholder-count="9"><span><span style="{{ c.style }}">{{ c.t }}</span></span></sc-for></div></sc-for></div>
+   </div>
+  </sc-if>
+
+  <sc-if value="{{ p.table }}" hint-placeholder-val="{{ false }}">
+   <div style="display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap">
+    <div style="margin-right:auto"><div style="font-size:22px;font-weight:600;letter-spacing:-.02em">{{ tb.title }}</div><div style="color:var(--mute);margin-top:4px;font-size:14px">{{ tb.sub }}</div></div>
+    <sc-if value="{{ tb.hasTabs }}" hint-placeholder-val="{{ false }}"><div style="display:flex;gap:6px"><sc-for list="{{ settingsTabs }}" as="t" hint-placeholder-count="4"><button onClick="{{ t.go }}" style="{{ t.style }}">{{ t.label }}</button></sc-for></div></sc-if>
+    <button onClick="{{ tb.act }}" disabled="{{ !tb.canAct }}" style="{{ tb.actStyle }}">{{ tb.actLabel }}</button>
+   </div>
+   <sc-if value="{{ tb.hasFilters }}" hint-placeholder-val="{{ false }}"><div style="display:flex;gap:8px;flex-wrap:wrap">
+    <sc-for list="{{ tb.filters }}" as="f" hint-placeholder-count="6"><span style="border:1px solid var(--line);background:var(--card);border-radius:8px;padding:5px 10px;font-size:12px;color:var(--mute)">{{ f }} <span style="color:var(--ink)">▾</span></span></sc-for>
+   </div></sc-if>
+   <div style="{{ card }};padding:0 18px 8px">
+    <div style="{{ tb.t.head }}"><sc-for list="{{ tb.t.cols }}" as="c" hint-placeholder-count="8"><span>{{ c }}</span></sc-for></div>
+    <sc-for list="{{ tb.t.rows }}" as="r" hint-placeholder-count="8"><div onClick="{{ r.go }}" style="{{ r.rowStyle }}"><sc-for list="{{ r.cells }}" as="c" hint-placeholder-count="8"><span><span style="{{ c.style }}">{{ c.t }}</span></span></sc-for></div></sc-for>
+    <div style="display:flex;justify-content:space-between;align-items:center;padding-top:12px;color:var(--mute);font-size:12px"><span>Showing {{ tb.t.count }} of {{ tb.total }}</span><span style="font-family:var(--mono)">‹ 1 2 3 ›</span></div>
+   </div>
+  </sc-if>
+
+  <sc-if value="{{ p.finding }}" hint-placeholder-val="{{ false }}">
+   <div style="display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap">
+    <div style="margin-right:auto"><div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><span style="font-size:24px;font-weight:600;letter-spacing:-.02em">SQL Injection</span><span style="font-family:var(--mono);color:var(--mute)">CWE-89</span><span style="{{ pillRed }}">✕ CRITICAL</span><span style="{{ pillGreen }}">✓ Confirmed</span></div>
+    <div style="font-family:var(--mono);font-size:12px;color:var(--mute);margin-top:6px">FND-20931 · repository/api/users.py:42 · python.sql-injection</div></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+     <button onClick="{{ act.fix }}" disabled="{{ !can.fix }}" style="{{ can.fixStyle }}">Generate fix</button>
+     <button onClick="{{ act.fp }}" disabled="{{ !can.write }}" style="{{ can.writeStyle }}">Mark false positive</button>
+     <button onClick="{{ act.suppress }}" disabled="{{ !can.write }}" style="{{ can.writeStyle }}">Suppress</button>
+     <button onClick="{{ act.assign }}" disabled="{{ !can.fix }}" style="{{ can.fixBtn }}">Assign</button>
+     <button onClick="{{ act.issue }}" disabled="{{ !can.fix }}" style="{{ can.fixBtn }}">Create issue</button>
+     <button onClick="{{ goRun }}" style="{{ btn }}">Open PR</button>
+    </div>
+   </div>
+   <div style="display:grid;grid-template-columns:minmax(0,1.5fr) minmax(300px,1fr);gap:20px;align-items:start">
+    <div style="display:flex;flex-direction:column;gap:20px;min-width:0">
+     <div style="{{ card }}"><div style="{{ cardH }}">Vulnerable code <span style="font-family:var(--mono);font-size:12px;color:var(--mute);font-weight:400">repository/api/users.py</span></div>
+      <div style="border:1px solid var(--line);border-radius:10px;overflow:hidden;font-family:var(--mono);font-size:12.5px;line-height:1.7">
+       <sc-for list="{{ code }}" as="l" hint-placeholder-count="9"><div style="{{ l.style }}"><span style="width:40px;text-align:right;padding-right:12px;color:var(--mute);flex:none">{{ l.n }}</span><span style="white-space:pre">{{ l.t }}</span><span style="{{ l.tagStyle }}">{{ l.tag }}</span></div></sc-for>
+      </div>
+     </div>
+     <div style="{{ card }}"><div style="{{ cardH }}">Data flow</div>
+      <div style="display:flex;flex-direction:column;align-items:flex-start;gap:0">
+       <sc-for list="{{ flow }}" as="n" hint-placeholder-count="6"><div style="display:flex;flex-direction:column;align-items:flex-start"><div style="{{ n.style }}"><span style="font-family:var(--mono)">{{ n.t }}</span><span style="{{ n.tagStyle }}">{{ n.tag }}</span></div><div style="padding:2px 0 2px 18px;color:var(--mute);height:20px;line-height:20px">{{ n.arrow }}</div></div></sc-for>
+      </div>
+     </div>
+     <div style="{{ card }}"><div style="{{ cardH }}">Context</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px 24px">
+       <sc-for list="{{ context }}" as="c" hint-placeholder-count="10"><div><div style="color:var(--mute);font-size:11px;margin-bottom:3px">{{ c.k }}</div><div style="font-family:var(--mono);font-size:12.5px">{{ c.v }}</div></div></sc-for>
+      </div>
+     </div>
+    </div>
+    <div style="{{ card }};position:sticky;top:0;min-width:0">
+     <div style="{{ cardH }}">AI Investigation <span style="{{ aiTag }}">AI GENERATED</span></div>
+     <div style="display:grid;grid-template-columns:repeat(3,1fr);border:1px solid var(--line);border-radius:10px;margin-bottom:16px">
+      <div style="padding:12px;border-right:1px solid var(--line)"><div style="color:var(--mute);font-size:11px">LLM verdict</div><div style="color:var(--red);font-weight:600;margin-top:4px;font-size:12.5px">TRUE POSITIVE</div></div>
+      <div style="padding:12px;border-right:1px solid var(--line)"><div style="color:var(--mute);font-size:11px">Laya confidence</div><div style="font-family:var(--mono);font-size:20px;margin-top:2px">92%</div></div>
+      <div style="padding:12px"><div style="color:var(--mute);font-size:11px">Rounds</div><div style="font-family:var(--mono);font-size:20px;margin-top:2px">2 / 3</div></div>
+     </div>
+     <div style="display:flex;flex-direction:column;gap:14px">
+      <sc-for list="{{ qa }}" as="q" hint-placeholder-count="2"><div style="border-top:1px solid var(--line);padding-top:14px;display:flex;flex-direction:column;gap:8px">
+       <div style="font-family:var(--mono);font-size:11px;color:var(--mute)">{{ q.n }}</div><div style="font-weight:500">{{ q.q }}</div>
+       <div><div style="color:var(--mute);font-size:11px;margin-bottom:2px">Answer</div><div style="line-height:1.5">{{ q.a }}</div></div>
+       <div style="background:var(--soft);border-radius:8px;padding:8px 10px"><span style="color:var(--mute);font-size:11px">Laya assessment</span><div style="margin-top:2px">{{ q.l }}</div></div>
+       <div style="font-family:var(--mono);font-size:11px;color:var(--mute)">tool: {{ q.tool }}</div></div></sc-for>
+     </div>
+     <div style="margin-top:14px;border-top:1px solid var(--line);padding-top:12px;font-family:var(--mono);font-size:11px;color:var(--mute);line-height:1.6">qwen3.5:35b-a3b · temp 0 · seed 42 · laya 2.4.1 · prompt v14<br>Only questions, evidence and conclusions are retained.</div>
+    </div>
+   </div>
+  </sc-if>
+
+  <sc-if value="{{ p.run }}" hint-placeholder-val="{{ false }}">
+   <div style="display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap">
+    <div style="margin-right:auto"><div style="display:flex;gap:10px;align-items:center"><span style="font-size:24px;font-weight:600;letter-spacing:-.02em;font-family:var(--mono)">Run #AF-18492</span><span style="{{ pillGreen }}">✓ COMPLETED</span></div>
+    <div style="color:var(--mute);margin-top:6px;font-family:var(--mono);font-size:12px">r0hitpilla/sast-poc-vuln-app · branch SV · commit 8f21d91</div></div>
+    <button onClick="{{ goPR }}" style="{{ btnPrimary }}">View pull request #184</button>
+   </div>
+   <div style="{{ card }}"><div style="{{ cardH }}">Pipeline <span style="color:var(--mute);font-weight:400;font-size:12px">click a stage</span></div>
+    <div style="display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px">
+     <sc-for list="{{ stages }}" as="s" hint-placeholder-count="6"><button onClick="{{ s.go }}" style="{{ s.style }}"><span style="font-size:11px;letter-spacing:.06em;font-family:var(--mono)">{{ s.i }}</span><span style="font-weight:600">{{ s.name }}</span><span style="font-family:var(--mono);font-size:18px">{{ s.dur }}</span><span style="{{ s.ds }}">✓ passed</span></button></sc-for>
+    </div>
+    <div style="margin-top:14px;padding:12px 14px;background:var(--soft);border-radius:10px;line-height:1.5"><b style="font-weight:600">{{ stageInfo.name }}.</b> {{ stageInfo.text }}</div>
+   </div>
+   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:20px">
+    <div style="{{ card }};grid-column:1/-1"><div style="{{ cardH }}">Proposed patch <span style="{{ aiTag }}">AI GENERATED</span></div>
+     <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;font-family:var(--mono);font-size:12.5px;line-height:1.7">
+      <div style="border:1px solid var(--line);border-radius:10px;overflow:hidden"><div style="padding:6px 12px;background:var(--soft);color:var(--mute);font-size:11px">BEFORE</div><sc-for list="{{ before }}" as="l" hint-placeholder-count="5"><div style="{{ l.style }}">{{ l.t }}</div></sc-for></div>
+      <div style="border:1px solid var(--line);border-radius:10px;overflow:hidden"><div style="padding:6px 12px;background:var(--soft);color:var(--mute);font-size:11px">AFTER</div><sc-for list="{{ after }}" as="l" hint-placeholder-count="5"><div style="{{ l.style }}">{{ l.t }}</div></sc-for></div>
+     </div>
+    </div>
+    <div style="{{ card }}"><div style="{{ cardH }}">Validation</div>
+     <div style="display:flex;flex-direction:column;gap:10px"><sc-for list="{{ checks }}" as="c" hint-placeholder-count="6"><div style="display:flex;gap:10px;align-items:center"><span style="color:var(--green);font-weight:600">✓</span>{{ c }}</div></sc-for></div>
+     <div style="margin-top:18px;border-top:1px solid var(--line);padding-top:14px"><div style="{{ cardH }};margin-bottom:10px">Patch risk <span style="{{ pillGreen }}">LOW</span></div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;font-family:var(--mono)"><div><div style="font-size:20px">1</div><div style="color:var(--mute);font-size:11px;font-family:var(--sans)">Files changed</div></div><div><div style="font-size:20px;color:var(--green)">+4</div><div style="color:var(--mute);font-size:11px;font-family:var(--sans)">Lines added</div></div><div><div style="font-size:20px;color:var(--red)">−1</div><div style="color:var(--mute);font-size:11px;font-family:var(--sans)">Lines removed</div></div></div></div>
+    </div>
+    <div style="{{ card }}"><div style="{{ cardH }}">Provenance</div>
+     <div style="display:flex;flex-direction:column"><sc-for list="{{ prov }}" as="p" hint-placeholder-count="9"><div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--line)"><span style="color:var(--mute)">{{ p.k }}</span><span style="font-family:var(--mono);font-size:12.5px">{{ p.v }}</span></div></sc-for></div>
+    </div>
+   </div>
+  </sc-if>
+
+  <sc-if value="{{ p.pr }}" hint-placeholder-val="{{ false }}">
+   <div style="display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap">
+    <div style="margin-right:auto"><div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><span style="font-size:24px;font-weight:600;letter-spacing:-.02em">PR #184 · Fix SQL injection in users API</span><span style="{{ pillRed }}">✕ Security gate BLOCKED</span></div>
+    <div style="color:var(--mute);margin-top:6px;font-family:var(--mono);font-size:12px">sast-poc-vuln-app · autofix/AF-18492 → SV · reviewer: m.alvarez</div></div>
+    <button onClick="{{ act.github }}" style="{{ btn }}">View on GitHub</button>
+    <button onClick="{{ act.approve }}" disabled="{{ !can.write }}" style="{{ can.writeStyle }}">Approve exception</button>
+   </div>
+   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));border:1px solid var(--line);border-radius:14px;background:var(--card);overflow:hidden">
+    <sc-for list="{{ prSummary }}" as="k" hint-placeholder-count="5"><div style="padding:16px 18px;border-right:1px solid var(--line)"><div style="color:var(--mute);font-size:12px">{{ k.l }}</div><div style="font-family:var(--mono);font-size:30px;margin-top:6px;color:{{ k.c }}">{{ k.v }}</div></div></sc-for>
+   </div>
+   <div style="{{ card }};padding:0 18px 8px"><div style="{{ cardH }};padding-top:16px">Changed findings</div>
+    <div style="{{ prT.head }}"><sc-for list="{{ prT.cols }}" as="c" hint-placeholder-count="6"><span>{{ c }}</span></sc-for></div>
+    <sc-for list="{{ prT.rows }}" as="r" hint-placeholder-count="5"><div style="{{ r.rowStyle }}"><sc-for list="{{ r.cells }}" as="c" hint-placeholder-count="6"><span><span style="{{ c.style }}">{{ c.t }}</span></span></sc-for></div></sc-for>
+   </div>
+  </sc-if>
+
+  <sc-if value="{{ p.policies }}" hint-placeholder-val="{{ false }}">
+   <div style="display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap">
+    <div style="margin-right:auto"><div style="font-size:22px;font-weight:600;letter-spacing:-.02em">Production Security Policy</div><div style="color:var(--mute);margin-top:4px;font-size:14px">Version 7 · active · applies to 9 repositories · branches main, release/*</div></div>
+    <button onClick="{{ act.policyHistory }}" style="{{ btn }}">Version history</button>
+    <button onClick="{{ act.policySave }}" disabled="{{ !can.write }}" style="{{ can.writePrimary }}">Publish v8</button>
+   </div>
+   <div style="display:grid;grid-template-columns:minmax(0,1.6fr) minmax(280px,1fr);gap:20px;align-items:start">
+    <div style="{{ card }};padding:0 18px"><div style="{{ cardH }};padding-top:16px">Rules <span style="color:var(--mute);font-weight:400;font-size:12px">evaluated top to bottom</span></div>
+     <sc-for list="{{ policyRules }}" as="r" hint-placeholder-count="8"><div style="display:grid;grid-template-columns:minmax(0,1fr) 190px;gap:12px;align-items:center;padding:12px 0;border-top:1px solid var(--line)"><span style="font-weight:500">{{ r.k }}</span><span style="{{ r.style }}">→ {{ r.v }}</span></div></sc-for>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:20px">
+     <div style="{{ card }}"><div style="{{ cardH }}">Scope</div><div style="display:flex;flex-wrap:wrap;gap:6px">
+      <sc-for list="{{ scopes }}" as="s" hint-placeholder-count="7"><span style="border:1px solid var(--line);border-radius:8px;padding:4px 9px;font-size:12px"><span style="color:var(--mute)">{{ s.k }}</span> <span style="font-family:var(--mono)">{{ s.v }}</span></span></sc-for></div></div>
+     <div style="{{ card }}"><div style="{{ cardH }}">Versions</div>
+      <sc-for list="{{ versions }}" as="v" hint-placeholder-count="4"><div style="display:grid;grid-template-columns:36px 1fr;gap:10px;padding:8px 0;border-top:1px solid var(--line)"><span style="font-family:var(--mono)">{{ v.v }}</span><div><div>{{ v.t }}</div><div style="color:var(--mute);font-size:12px;font-family:var(--mono)">{{ v.m }}</div></div></div></sc-for></div>
+    </div>
+   </div>
+  </sc-if>
+
+  <sc-if value="{{ p.integrations }}" hint-placeholder-val="{{ false }}">
+   <div style="display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap"><div style="margin-right:auto"><div style="font-size:22px;font-weight:600;letter-spacing:-.02em">Integrations</div><div style="color:var(--mute);margin-top:4px;font-size:14px">Connect source control, CI/CD, notifications, ticketing and security tools</div></div>
+    <button onClick="{{ act.integ }}" disabled="{{ !can.admin }}" style="{{ can.adminPrimary }}">Create integration</button></div>
+   <sc-for list="{{ integ }}" as="g" hint-placeholder-count="5"><div><div style="font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--mute);margin-bottom:10px">{{ g.cat }}</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px">
+     <sc-for list="{{ g.items }}" as="i" hint-placeholder-count="3"><div style="{{ card }};padding:14px 16px;display:flex;flex-direction:column;gap:10px">
+      <div style="display:flex;justify-content:space-between;align-items:center"><span style="font-weight:600;font-size:14px">{{ i.name }}</span><span style="{{ i.pill }}">{{ i.status }}</span></div>
+      <div style="font-family:var(--mono);font-size:12px;color:var(--mute);line-height:1.6;min-height:38px">{{ i.meta }}</div>
+      <button onClick="{{ i.go }}" disabled="{{ !can.admin }}" style="{{ can.adminBtn }}">{{ i.btn }}</button></div></sc-for>
+    </div></div></sc-for>
+  </sc-if>
+
+  <sc-if value="{{ p.wizard }}" hint-placeholder-val="{{ false }}">
+   <div style="font-size:22px;font-weight:600;letter-spacing:-.02em">Create integration</div>
+   <div style="display:flex;gap:6px;flex-wrap:wrap"><sc-for list="{{ wizSteps }}" as="s" hint-placeholder-count="7"><span style="{{ s.style }}">{{ s.n }} {{ s.t }}</span></sc-for></div>
+   <div style="{{ card }};max-width:720px;display:flex;flex-direction:column;gap:16px">
+    <div style="font-size:16px;font-weight:600">{{ wiz.title }}</div><div style="color:var(--mute);line-height:1.5">{{ wiz.text }}</div>
+    <div style="display:flex;flex-direction:column;gap:8px"><sc-for list="{{ wiz.items }}" as="i" hint-placeholder-count="4"><div style="display:flex;gap:10px;align-items:center;border:1px solid var(--line);border-radius:10px;padding:10px 12px"><span style="{{ i.box }}">{{ i.mark }}</span>{{ i.t }}</div></sc-for></div>
+    <div style="display:flex;gap:8px;justify-content:space-between"><button onClick="{{ wizBack }}" style="{{ btn }}">Back</button><button onClick="{{ wizNext }}" style="{{ btnPrimary }}">{{ wiz.next }}</button></div>
+   </div>
+  </sc-if>
+
+  <sc-if value="{{ p.models }}" hint-placeholder-val="{{ false }}">
+   <div style="display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap"><div style="margin-right:auto"><div style="font-size:22px;font-weight:600;letter-spacing:-.02em">Models</div><div style="color:var(--mute);margin-top:4px;font-size:14px">All inference runs locally on DGX Spark. No prompts or code leave your network.</div></div><span style="{{ pillGreen }}">✓ 100% local</span></div>
+   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:20px">
+    <sc-for list="{{ models }}" as="m" hint-placeholder-count="2"><div style="{{ card }}"><div style="{{ cardH }}">{{ m.name }} <span style="{{ pillGreen }}">● ONLINE</span></div>
+     <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px 20px"><sc-for list="{{ m.rows }}" as="r" hint-placeholder-count="8"><div><div style="color:var(--mute);font-size:11px;margin-bottom:3px">{{ r.k }}</div><div style="font-family:var(--mono);font-size:13px">{{ r.v }}</div></div></sc-for></div>
+     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:18px"><sc-for list="{{ m.actions }}" as="a" hint-placeholder-count="4"><button onClick="{{ a.go }}" disabled="{{ !can.admin }}" style="{{ can.adminBtn }}">{{ a.t }}</button></sc-for></div></div></sc-for>
+   </div>
+  </sc-if>
+
+  <sc-if value="{{ p.reports }}" hint-placeholder-val="{{ false }}">
+   <div style="display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap"><div style="margin-right:auto"><div style="font-size:22px;font-weight:600;letter-spacing:-.02em">Reports</div><div style="color:var(--mute);margin-top:4px;font-size:14px">Last 30 days · all repositories</div></div>
+    <button onClick="{{ act.csv }}" style="{{ btn }}">CSV</button><button onClick="{{ act.json }}" style="{{ btn }}">JSON</button><button onClick="{{ act.pdf }}" style="{{ btnPrimary }}">PDF</button></div>
+   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));border:1px solid var(--line);border-radius:14px;background:var(--card);overflow:hidden"><sc-for list="{{ repKpis }}" as="k" hint-placeholder-count="5"><div style="padding:16px 18px;border-right:1px solid var(--line)"><div style="color:var(--mute);font-size:12px">{{ k.l }}</div><div style="font-family:var(--mono);font-size:26px;margin-top:6px">{{ k.v }}</div></div></sc-for></div>
+   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:20px">
+    <sc-for list="{{ charts }}" as="c" hint-placeholder-count="3"><div style="{{ card }}"><div style="{{ cardH }}">{{ c.title }}</div><div style="display:flex;flex-direction:column;gap:10px">
+     <sc-for list="{{ c.bars }}" as="b" hint-placeholder-count="5"><div style="display:grid;grid-template-columns:120px 1fr 44px;gap:12px;align-items:center"><span style="font-size:12px">{{ b.l }}</span><div style="height:8px;background:var(--soft);border-radius:4px"><div style="{{ b.bar }}"></div></div><span style="font-family:var(--mono);text-align:right;font-size:12px">{{ b.v }}</span></div></sc-for></div></div></sc-for>
+   </div>
+  </sc-if>
+
+  <sc-if value="{{ p.health }}" hint-placeholder-val="{{ false }}">
+   <div style="display:flex;align-items:flex-end;gap:12px"><div style="margin-right:auto"><div style="font-size:22px;font-weight:600;letter-spacing:-.02em">System health</div><div style="color:var(--mute);margin-top:4px;font-size:14px">DGX Spark · self-hosted</div></div><span style="{{ pillGreen }}">● ONLINE</span></div>
+   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));border:1px solid var(--line);border-radius:14px;background:var(--card);overflow:hidden"><sc-for list="{{ healthKpis }}" as="k" hint-placeholder-count="5"><div style="padding:16px 18px;border-right:1px solid var(--line)"><div style="color:var(--mute);font-size:12px">{{ k.l }}</div><div style="font-family:var(--mono);font-size:26px;margin-top:6px;color:{{ k.c }}">{{ k.v }}</div></div></sc-for></div>
+   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:20px">
+    <div style="{{ card }}"><div style="{{ cardH }}">Resources</div><div style="display:flex;flex-direction:column;gap:14px">
+     <sc-for list="{{ resources }}" as="r" hint-placeholder-count="5"><div><div style="display:flex;justify-content:space-between;margin-bottom:6px"><span>{{ r.l }}</span><span style="font-family:var(--mono)">{{ r.v }}%</span></div><div style="height:8px;background:var(--soft);border-radius:4px"><div style="{{ r.bar }}"></div></div></div></sc-for></div></div>
+    <div style="{{ card }}"><div style="{{ cardH }}">Services</div>
+     <sc-for list="{{ services }}" as="s" hint-placeholder-count="8"><div style="display:flex;justify-content:space-between;padding:8px 0;border-top:1px solid var(--line)"><span>{{ s.n }}</span><span style="font-family:var(--mono);font-size:12px;color:var(--mute)">{{ s.u }} uptime <span style="color:var(--green);font-weight:600">✓</span></span></div></sc-for></div>
+   </div>
+  </sc-if>
+  </div>
+ </main>
+
+ <sc-if value="{{ confirm }}" hint-placeholder-val="{{ false }}">
+  <div style="position:fixed;inset:0;background:rgba(0,0,0,.4);display:grid;place-items:center;z-index:20">
+   <div style="width:420px;max-width:90vw;background:var(--card);color:var(--ink);border:1px solid var(--line);border-radius:14px;padding:22px;display:flex;flex-direction:column;gap:12px;font-family:var(--sans)">
+    <div style="font-size:16px;font-weight:600">{{ confirm.title }}</div><div style="color:var(--mute);line-height:1.5">{{ confirm.text }}</div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:6px"><button onClick="{{ closeConfirm }}" style="{{ btn }}">Cancel</button><button onClick="{{ okConfirm }}" style="height:32px;padding:0 14px;border-radius:8px;border:0;background:var(--red);color:#fff;cursor:pointer;font-size:13px">{{ confirm.ok }}</button></div>
+   </div>
+  </div>
+ </sc-if>
+ <sc-if value="{{ toast }}" hint-placeholder-val="{{ false }}">
+  <div style="position:fixed;bottom:24px;right:24px;background:var(--ink);color:var(--bg);padding:11px 16px;border-radius:10px;font-size:13px;z-index:30;font-family:var(--sans)">{{ toast }}</div>
+ </sc-if>
+</div>
+</sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  state = { authed: false, page: 'overview', role: 'Admin', dark: false, toast: '', confirm: null, stage: 3, wiz: 0 };
+  setP = (page) => () => this.setState({ page });
+  say = (m) => { this.setState({ toast: m }); clearTimeout(this._t); this._t = setTimeout(() => this.setState({ toast: '' }), 2400); };
+  ask = (title, text, ok, done) => () => this.setState({ confirm: { title, text, ok, done } });
+
+  renderVals() {
+    const s = this.state, role = s.role, dark = s.dark;
+    const L = { bg:'#faf9f6', card:'#ffffff', soft:'#f4f2ed', line:'#e8e5de', ink:'#141414', mute:'#74716a', red:'#c8203c', redbg:'#fde8ec', amber:'#9a6700', amberbg:'#fbf0d2', green:'#1f7a45', greenbg:'#e3f4ea', blue:'#3b4fd8', bluebg:'#e8ebfd', orange:'#c2500f', orangebg:'#fdebdc', grey:'#6b6860', greybg:'#eeece6' };
+    const D = { bg:'#121211', card:'#1a1a18', soft:'#161614', line:'#2d2c29', ink:'#f2f0ea', mute:'#98958c', red:'#ff6b81', redbg:'#3a1820', amber:'#e5b13a', amberbg:'#352a10', green:'#4cc27f', greenbg:'#12301f', blue:'#8f9cff', bluebg:'#1f2347', orange:'#ff9a5c', orangebg:'#3a2210', grey:'#a8a59c', greybg:'#262522' };
+    const th = dark ? D : L;
+    const rootStyle = Object.keys(th).map(k => `--${k}:${th[k]}`).join(';') + ';--sans:Geist,system-ui,sans-serif;--mono:"Geist Mono",ui-monospace,monospace;min-height:100vh;background:var(--bg)';
+    const IC = { red:'✕', amber:'!', green:'✓', blue:'●', grey:'–', orange:'▲' };
+    const pillStyle = (tone) => `display:inline-flex;align-items:center;gap:5px;padding:2px 9px;border-radius:999px;font-size:11.5px;font-weight:500;color:var(--${tone});background:var(--${tone}bg);white-space:nowrap`;
+    const P = (t, tone) => ({ t: `${IC[tone]} ${t}`, style: pillStyle(tone) });
+    const M = (t) => ({ t, style: 'font-family:var(--mono);font-size:12px;color:var(--mute)' });
+    const T = (t) => ({ t, style: 'font-size:13px' });
+    const B = (t) => ({ t, style: 'font-size:13px;font-weight:500' });
+    const N = (t, c) => ({ t, style: `font-family:var(--mono);font-size:13px;${c ? 'color:var(--' + c + ')' : ''}` });
+    const tbl = (cols, grid, rows, go) => ({ cols, count: rows.length,
+      head: `display:grid;grid-template-columns:${grid};gap:12px;padding:12px 0;border-bottom:1px solid var(--line);color:var(--mute);font-size:11.5px;font-weight:500`,
+      row: `display:grid;grid-template-columns:${grid};gap:12px;padding:11px 0;border-bottom:1px solid var(--line);align-items:center;font-size:13px`,
+      rows: rows.map((cells, i) => ({ cells, go: go ? go(i) : () => {}, rowStyle: `display:grid;grid-template-columns:${grid};gap:12px;padding:11px 0;border-bottom:1px solid var(--line);align-items:center;font-size:13px;cursor:${go ? 'pointer' : 'default'}` })) });
+
+    const goFinding = () => () => this.setP('finding')();
+    const goRunF = () => () => this.setP('run')();
+    const goPRF = () => () => this.setP('pr')();
+    const goRepo = () => () => this.setP('findings')();
+
+    const sevP = { Critical: P('Critical','red'), High: P('High','orange'), Medium: P('Medium','amber'), Low: P('Low','blue') };
+    const runs = [
+      ['AF-18492','sast-poc-vuln-app','SV','8','4','1','3','2m 07s',P('Completed','green')],
+      ['AF-18491','payments-api','main','12','7','3','2','3m 41s',P('Review','amber')],
+      ['AF-18490','web-frontend','release/4.2','5','0','0','0','0m 52s',P('Running','blue')],
+      ['AF-18489','infra-deploy','main','3','0','1','2','1m 18s',P('Failed','red')],
+    ].map(r => [M(r[0]), B(r[1]), M(r[2]), N(r[3]), N(r[4],'green'), N(r[5],'amber'), N(r[6],'red'), M(r[7]), r[8]]);
+    const repoRows = [
+      ['sast-poc-vuln-app','GitHub','SV','2m ago',8,2,'Production','Enabled',P('Blocked','red')],
+      ['payments-api','GitHub','main','18m ago',23,1,'Production','Enabled',P('Review','amber')],
+      ['web-frontend','GitLab','release/4.2','1h ago',14,0,'Standard','Enabled',P('Healthy','green')],
+      ['infra-deploy','GitHub','main','3h ago',6,1,'Strict','Disabled',P('Blocked','red')],
+      ['internal-tools','Bitbucket','develop','1d ago',2,0,'Standard','Paused',P('Healthy','green')],
+    ];
+    const ovRepos = tbl(['Repository','Findings','Critical','Autofix','Last scan','Status'],'1.6fr .7fr .7fr .9fr .9fr 1fr',
+      repoRows.map(r => [B(r[0]), N(r[4]), N(r[5], r[5] ? 'red' : null), T(r[7]), M(r[3]), r[8]]), goRepo);
+    const ovRuns = tbl(['Run','Repository','Branch','Findings','Fixed','Review','Rejected','Duration','Status'],'.9fr 1.4fr .9fr .7fr .6fr .6fr .7fr .8fr 1fr', runs, goRunF);
+
+    const crumbs = { overview:'Overview', repositories:'Repositories', findings:'Findings', finding:'Findings / SQL Injection (FND-20931)', runs:'Autofix Runs', run:'Autofix Runs / AF-18492', prs:'Pull Requests', pr:'Pull Requests / #184', policies:'Policies', integrations:'Integrations', wizard:'Integrations / New', webhooks:'Webhooks', models:'Models', rules:'Rules', audit:'Audit Log', reports:'Reports', health:'System Health', settings:'Settings', users:'Settings / Users & roles', apikeys:'Settings / API keys', notifications:'Notifications' };
+    const canAdmin = role === 'Admin', canWrite = role === 'Admin' || role === 'Security Engineer', canFix = canWrite || role === 'Developer';
+    const bs = (on, pri) => `height:32px;padding:0 14px;border-radius:8px;font-size:13px;border:1px solid ${pri ? 'transparent' : 'var(--line)'};background:${pri ? 'var(--ink)' : 'var(--card)'};color:${pri ? 'var(--bg)' : 'var(--ink)'};cursor:${on ? 'pointer' : 'not-allowed'};opacity:${on ? 1 : .4};white-space:nowrap`;
+    const btn = bs(true, false), btnPrimary = bs(true, true);
+    const can = { admin: canAdmin, write: canWrite, fix: canFix,
+      adminBtn: bs(canAdmin,false), adminPrimary: bs(canAdmin,true), writeStyle: bs(canWrite,false), writePrimary: bs(canWrite,true), fixStyle: bs(canFix,true), fixBtn: bs(canFix,false) };
+
+    // table pages
+    const tp = {
+      repositories: { title:'Repositories', sub:'12 connected · 9 with autofix enabled', actLabel:'Connect repository', filters:['Provider','Policy','Autofix status','Integration'], total:12,
+        t: tbl(['Repository','Provider','Default branch','Last scan','Findings','Policy','Autofix','Integration'],'1.6fr .8fr 1fr .9fr .7fr 1fr .9fr 1fr',
+          repoRows.map(r => [B(r[0]), T(r[1]), M(r[2]), M(r[3]), N(r[4]), T(r[6]), r[7]==='Enabled'?P('Enabled','green'):P(r[7],'grey'), P('Connected','green')]), goRepo) },
+      findings: { title:'Findings', sub:'Triaged by AI, decided by Laya, gated by policy', actLabel:'Export', filters:['Severity','CWE','OWASP','Repository','Branch','Rule','Status','AI verdict','Laya confidence','Autofix status','Date'], total:63, free:true,
+        t: tbl(['Severity','Finding','Repository','File','Line','AI verdict','Confidence','Fix status'],'.8fr 1.3fr 1.1fr 1.5fr .5fr 1fr .8fr 1fr',
+          [['Critical','SQL injection','sast-poc-vuln-app','repository/api/users.py','42','True positive','92%',P('Fixed','green')],
+           ['High','Cross-site scripting','web-frontend','components/User.tsx','118','True positive','81%',P('Review','amber')],
+           ['Critical','Command injection','infra-deploy','scripts/deploy.py','27','True positive','88%',P('Rejected','red')],
+           ['Medium','Weak hash (MD5)','payments-api','core/crypto.py','9','Uncertain','64%',P('Queued','blue')],
+           ['High','Path traversal','payments-api','api/files.py','73','True positive','90%',P('Fixed','green')],
+           ['Low','Hardcoded test token','internal-tools','tests/conftest.py','5','False positive','95%',P('Suppressed','grey')],
+           ['Medium','Open redirect','web-frontend','auth/callback.ts','51','True positive','77%',P('Review','amber')]]
+          .map(r => [sevP[r[0]], B(r[1]), T(r[2]), M(r[3]), M(r[4]), T(r[5]), N(r[6]), r[7]]), goFinding) },
+      runs: { title:'Autofix Runs', sub:'Scan → triage → policy → fix → validate → publish', actLabel:'Start run', filters:['Repository','Status','Branch','Date'], total:184, t: tbl(['Run','Repository','Branch','Findings','Fixed','Review','Rejected','Duration','Status'],'.9fr 1.4fr .9fr .7fr .6fr .6fr .7fr .8fr 1fr', runs, goRunF) },
+      prs: { title:'Pull Requests', sub:'Human-reviewed fixes with security gate status', actLabel:'Refresh', filters:['Repository','Reviewer','Gate','Status'], total:41,
+        t: tbl(['PR','Repository','Branch','Findings','Fixes','Validation','Security gate','Reviewer','Status'],'.6fr 1.3fr 1fr .7fr .6fr .9fr 1fr 1fr .9fr',
+          [['#184','sast-poc-vuln-app','autofix/AF-18492','8','4',P('Passed','green'),P('Blocked','red'),'m.alvarez',P('Open','blue')],
+           ['#183','payments-api','autofix/AF-18491','12','7',P('Passed','green'),P('Review','amber'),'j.okafor',P('Open','blue')],
+           ['#181','web-frontend','autofix/AF-18480','4','4',P('Passed','green'),P('Passed','green'),'s.kim',P('Merged','grey')],
+           ['#179','infra-deploy','autofix/AF-18471','3','1',P('Failed','red'),P('Blocked','red'),'—',P('Closed','grey')]]
+          .map(r => [B(r[0]), T(r[1]), M(r[2]), N(r[3]), N(r[4]), r[5], r[6], T(r[7]), r[8]]), goPRF) },
+      webhooks: { title:'Webhooks', sub:'Inbound events from source control and CI/CD', actLabel:'Add webhook', filters:['Status','Provider'], total:6, admin:true,
+        t: tbl(['Webhook','Endpoint','Events','Last delivery','Success rate','Status'],'1.1fr 1.6fr 1.4fr 1fr .8fr 1fr',
+          [['GitHub','/webhooks/github','push, pull_request','14:42:03','99.2%',P('Active','green')],['GitLab','/webhooks/gitlab','push, merge','13:10:44','97.8%',P('Active','green')],['Jenkins','/webhooks/jenkins','build_complete','12:02:19','88.1%',P('Degraded','amber')],['Slack','/hooks/slack-alerts','gate_blocked','11:48:57','100%',P('Active','green')]]
+          .map(r => [B(r[0]), M(r[1]), M(r[2]), M(r[3]), N(r[4]), r[5]])) },
+      rules: { title:'Rules', sub:'Semgrep packs and custom rules', actLabel:'Upload rule', filters:['OWASP Top 10','Security Audit','Custom','Organization'], total:412, admin:true,
+        t: tbl(['Rule ID','CWE','Severity','Pack','Autofix allowed','Policy'],'1.8fr .8fr .8fr 1.2fr 1fr 1.2fr',
+          [['python.sql-injection','CWE-89','Critical','OWASP Top 10','Yes'],['javascript.xss.dom','CWE-79','High','OWASP Top 10','Review'],['python.subprocess-shell','CWE-78','Critical','Security Audit','No'],['org.hardcoded-secret','CWE-798','High','Organization','No'],['custom.unsafe-yaml-load','CWE-502','High','Custom','Yes']]
+          .map(r => [M(r[0]), M(r[1]), sevP[r[2]], T(r[3]), r[4]==='Yes'?P('Yes','green'):r[4]==='No'?P('No','red'):P('Review','amber'), T('Production Security')])) },
+      audit: { title:'Audit Log', sub:'Append-only. Entries cannot be edited or deleted.', actLabel:'Export log', filters:['User','Repository','Event','Severity','Date','Run ID'], total:2481, canAct:true,
+        t: tbl(['Timestamp','Actor','Event','Target','Correlation ID'],'1fr 1.1fr 2fr 1.3fr 1.2fr',
+          [['14:42:11','AI',P('AI GENERATED','blue'),'Patch for users.py:42','c-8f21d91a'],['14:40:02','system',B('Autofix executed'),'AF-18492','c-8f21d90b'],['14:36:44','m.alvarez',B('Finding marked false positive'),'FND-20877','c-7e12aa43'],['14:21:09','k.yevingy',B('User changed security policy'),'Production v7','c-7e12a002'],['13:58:30','system',B('Policy blocked merge'),'PR #184','c-6d4410ff'],['13:12:18','k.yevingy',B('Webhook secret rotated'),'/webhooks/github','c-5b09e1c7'],['12:03:55','k.yevingy',B('Repository connected'),'payments-api','c-4a98d22e']]
+          .map(r => [M(r[0]), T(r[1]), typeof r[2].style==='string'&&r[2].t.startsWith('●')?r[2]:r[2], T(r[3]), M(r[4])])) },
+      users: { title:'Users & roles', sub:'Role-based access control', actLabel:'Invite user', filters:['Role'], total:4, admin:true,
+        t: tbl(['User','Role','Scope','Last active','MFA'],'1.4fr 1.2fr 1.6fr 1fr .8fr',
+          [['Karl Yevingy','Admin','All','now',P('On','green')],['M. Alvarez','Security Engineer','All repositories','5m ago',P('On','green')],['S. Kim','Developer','web-frontend','2h ago',P('On','green')],['A. Novak','Auditor','Read-only','1d ago',P('Off','amber')]]
+          .map(r => [B(r[0]), T(r[1]), T(r[2]), M(r[3]), r[4]])) },
+      apikeys: { title:'API keys', sub:'Secrets are shown once at creation and never again', actLabel:'Create key', filters:['Type','Scope'], total:5, admin:true,
+        t: tbl(['Name','Key','Scopes','Rate limit','Last used','Status'],'1.2fr 1.3fr 2fr .9fr .9fr .9fr',
+          [['ci-pipeline','sk_live_••••••••9f2a','repository:scan, finding:read','600/min','2m ago',P('Active','green')],['jira-sync','sk_live_••••••••c41d','finding:read, finding:write','120/min','1h ago',P('Active','green')],['old-bot','sk_live_••••••••07be','autofix:execute','60/min','41d ago',P('Revoked','red')]]
+          .map(r => [B(r[0]), M(r[1]), M(r[2]), M(r[3]), M(r[4]), r[5]])) },
+      notifications: { title:'Notifications', sub:'3 unread', actLabel:'Mark all read', filters:['Type','Repository'], total:12, canAct:true,
+        t: tbl(['Time','Notification','Repository','Type'],'.6fr 3fr 1.4fr 1fr',
+          [['14:42','PR #184 blocked by security gate','sast-poc-vuln-app',P('Blocked','red')],['13:48','XSS finding requires review','web-frontend',P('Review','amber')],['12:15','Command injection fix rejected','infra-deploy',P('Rejected','red')],['11:02','Run AF-18491 completed','payments-api',P('Completed','green')]]
+          .map(r => [M(r[0]), B(r[1]), T(r[2]), r[3]])) },
+      settings: { title:'Settings', sub:'Workspace, security, AI, autofix and notifications', actLabel:'Save changes', tabs:true, total:12, admin:true,
+        t: tbl(['Section','Setting','Value'],'1fr 1.6fr 2fr',
+          [['Workspace','Workspace name','acme-security'],['Workspace','Timezone','UTC+00:00'],['Security','SSO','SAML · Okta'],['Security','Session policy','8h idle timeout, MFA required'],['AI','Model','qwen3.5:35b-a3b · temp 0 · seed 42'],['AI','Timeout / retries','120s / 3 rounds'],['Autofix','Max retries','2'],['Autofix','Blocked file patterns','.github/**, Jenkinsfile, *.tf'],['Autofix','Risk threshold','Low only'],['Notifications','Channels','Slack, Email, Webhook']]
+          .map(r => [T(r[0]), B(r[1]), M(r[2])])) },
+    };
+    const cur = tp[s.page];
+    const onlyAdmin = cur && cur.admin;
+    const actDone = (m) => () => this.say(m);
+    const tb = cur ? { title: cur.title, sub: cur.sub, t: cur.t, total: cur.total, filters: cur.filters || [], hasFilters: !!cur.filters, hasTabs: !!cur.tabs,
+      actLabel: cur.actLabel, canAct: onlyAdmin ? canAdmin : (cur.canAct || canFix), actStyle: bs(onlyAdmin ? canAdmin : true, true),
+      act: actDone(cur.actLabel + ' — done') } : { t: tbl([], '1fr', []), filters: [] };
+
+    const settingsTabs = [['settings','General'],['users','Users & roles'],['apikeys','API keys'],['notifications','Notifications']].map(([k, l]) => ({ label: l, go: this.setP(k), style: bs(true, s.page === k) }));
+
+    // nav
+    const hide = { Developer: ['integrations','webhooks','models','health','settings','audit'], Auditor: ['integrations','webhooks','models','settings'], 'Security Engineer': ['settings'] }[role] || [];
+    const groupOf = { run:'runs', finding:'findings', pr:'prs', wizard:'integrations', users:'settings', apikeys:'settings', notifications:'settings' };
+    const active = groupOf[s.page] || s.page;
+    const navDef = [['overview','Overview'],['repositories','Repositories'],['findings','Findings','63'],['runs','Autofix Runs'],['prs','Pull Requests','2'],['policies','Policies'],['integrations','Integrations'],['webhooks','Webhooks'],['models','Models'],['rules','Rules'],['audit','Audit Log'],['reports','Reports'],['health','System Health'],['settings','Settings']];
+    const nav = navDef.filter(n => !hide.includes(n[0])).map(n => ({ label: n[1], badge: n[2] || '', go: this.setP(n[0]),
+      style: `display:flex;justify-content:space-between;align-items:center;border:0;text-align:left;padding:7px 10px;border-radius:8px;font-size:13px;cursor:pointer;color:var(--ink);background:${active === n[0] ? 'var(--card)' : 'transparent'};box-shadow:${active === n[0] ? '0 0 0 1px var(--line)' : 'none'};font-weight:${active === n[0] ? 500 : 400}`,
+      badgeStyle: 'font-family:var(--mono);font-size:11px;color:var(--mute)' }));
+
+    const lifecycle = ['Repository','Scan','Finding','Evidence','AI Investigation','Laya Decision','Policy','Autofix','Validation','Pull Request','Human Review','Security Gate','Merge']
+      .map((t, i, a) => ({ n: String(i + 1).padStart(2, '0'), t, arrow: i < a.length - 1 ? '→' : '',
+        pillStyle: `padding:4px 8px;border-radius:8px;${i === 7 ? 'background:var(--ink);color:var(--bg)' : 'background:var(--soft)'}` }));
+
+    const dl = (v, good) => ({ ds: `font-size:12px;color:var(--${good ? 'green' : 'red'})`, d: v });
+    const kpis = [
+      ['Open findings','63',dl('↓ 8 vs last week',1)],['Critical / High','11 / 19',dl('↑ 2 vs last week',0)],['Autofix success','71.4%',dl('↑ 3.1% vs last week',1)],
+      ['Fixed this week','27',dl('↑ 6 vs last week',1)],['Avg remediation','3h 12m',dl('↓ 41m vs last week',1)],['Blocked PRs','2',dl('↑ 1 vs yesterday',0)],
+    ].map(k => ({ l: k[0], v: k[1], vs: `font-family:var(--mono);font-size:26px;letter-spacing:-.02em;${k[0] === 'Blocked PRs' ? 'color:var(--red)' : ''}`, ...k[2] }));
+    const posture = [['Critical',11,'red','↑ 2'],['High',19,'orange','↓ 3'],['Medium',24,'amber','↓ 5'],['Low',9,'blue','↓ 2']].map(r => ({ l: r[0], n: r[1], d: r[3] + ' vs prev', ds: `font-family:var(--mono);font-size:12px;color:var(--${r[3][0] === '↑' ? 'red' : 'green'})`, bar: `height:8px;border-radius:4px;background:var(--${r[2]});width:${r[1] * 3.6}%` }));
+    const activity = [['14:32','SQL injection fixed','Fixed','green','repository/api/users.py · PR #184'],['13:48','XSS finding requires review','Review','amber','frontend/components/User.tsx'],['12:15','Command injection rejected','Rejected','red','scripts/deploy.py']]
+      .map(a => ({ time: a[0], t: a[1], tag: IC[a[3]] + ' ' + a[2], pill: pillStyle(a[3]), f: a[4] }));
+
+    const code = [[38,'def get_user(request):'],[39,'    conn = db.connect()'],[40,'    username = request.args["username"]','SOURCE'],[41,'    query = build_query(username)'],[42,'    cursor.execute(query)','SINK'],[43,'    return cursor.fetchall()']]
+      .map(r => ({ n: r[0], t: r[1], tag: r[2] || '',
+        style: `display:flex;padding:1px 12px 1px 0;background:${r[2] === 'SINK' ? 'var(--redbg)' : r[2] ? 'var(--amberbg)' : 'var(--card)'}`,
+        tagStyle: r[2] ? `margin-left:auto;font-size:10px;padding:0 6px;border-radius:4px;align-self:center;color:var(--${r[2] === 'SINK' ? 'red' : 'amber'})` : '' }));
+    const flowDef = [['HTTP Request'],['request.args'],['username','SOURCE'],['build_query()'],['SQL Query'],['cursor.execute()','SINK']];
+    const flow = flowDef.map((f, i) => ({ t: f[0], tag: f[1] || '', arrow: i < flowDef.length - 1 ? '↓' : '',
+      style: `display:flex;gap:10px;align-items:center;padding:6px 12px;border-radius:8px;border:1px solid ${f[1] === 'SINK' ? 'var(--red)' : f[1] ? 'var(--amber)' : 'var(--line)'};background:${f[1] === 'SINK' ? 'var(--redbg)' : f[1] ? 'var(--amberbg)' : 'var(--card)'}`,
+      tagStyle: f[1] ? `font-size:10px;font-weight:600;color:var(--${f[1] === 'SINK' ? 'red' : 'amber'})` : '' }));
+    const context = [['File','repository/api/users.py'],['Function','get_user()'],['Repository','sast-poc-vuln-app'],['Commit','8f21d91'],['Rule','python.sql-injection'],['CWE','CWE-89'],['OWASP','A03:2021 Injection'],['First detected','2026-09-28 09:14'],['Last detected','2026-10-06 14:30']].map(c => ({ k: c[0], v: c[1] }));
+    const qa = [
+      { n:'QUESTION 1', q:'Does attacker-controlled input reach the SQL sink?', a:'Yes. username originates from request.args and flows into build_query() without parameterization.', l:'Evidence supports TRUE POSITIVE.', tool:'semgrep taint trace · 6 nodes' },
+      { n:'QUESTION 2', q:'Is the sink safely parameterized?', a:'No. The query is constructed using string interpolation.', l:'High confidence (92%).', tool:'ast.read users.py:38-43' }];
+
+    const stageDef = [['SCAN','18s','Semgrep scanned 214 files with 412 rules and reported 8 findings.'],['TRIAGE','43s','The local model investigated each finding in up to 3 rounds. Laya recorded 5 confirmed, 3 false positives.'],['POLICY','4s','Production Security v7 allowed autofix for 4 low-risk findings. 1 routed to human review.'],['FIX','27s','Patches generated for 4 findings. Each patch is tagged AI GENERATED with full provenance.'],['VALIDATE','31s','Semgrep rescan, syntax check, pyflakes and unit tests passed on all patches.'],['PUBLISH','8s','Pull request #184 opened. Security gate blocked on 1 finding requiring review.']];
+    const stages = stageDef.map((d, i) => ({ i: String(i + 1).padStart(2, '0'), name: d[0], dur: d[1], go: () => this.setState({ stage: i }),
+      style: `display:flex;flex-direction:column;gap:6px;align-items:flex-start;padding:12px;border-radius:10px;cursor:pointer;color:var(--ink);text-align:left;border:1px solid ${s.stage === i ? 'var(--ink)' : 'var(--line)'};background:${s.stage === i ? 'var(--soft)' : 'var(--card)'}`, ds: 'font-size:11px;color:var(--green)' }));
+    const stageInfo = { name: stageDef[s.stage][0], text: stageDef[s.stage][2] };
+    const mk = (arr, bg) => arr.map(t => ({ t, style: `padding:0 12px;white-space:pre;background:${t.startsWith('-') ? 'var(--redbg)' : t.startsWith('+') ? 'var(--greenbg)' : 'var(--card)'}` }));
+    const before = mk(['  username = request.args["username"]','-  query = f"SELECT * FROM users WHERE name=\'{username}\'"','-  cursor.execute(query)','',' ']);
+    const after = mk(['  username = request.args["username"]','+  query = "SELECT * FROM users WHERE name = %s"','+  params = (username,)','+  cursor.execute(query, params)','+  # parameterized by autofix AF-18492']);
+    const checks = ['Semgrep rescan','Syntax check','Pyflakes','Unit tests','Regression scan','No unexpected files modified'];
+    const prov = [['Model','qwen3.5:35b-a3b'],['Model version','2026.09.2'],['Temperature','0'],['Seed','42'],['Laya version','2.4.1'],['Policy version','Production v7'],['Prompt version','fix-sqli v14'],['Run ID','AF-18492'],['Commit SHA','8f21d91']].map(r => ({ k: r[0], v: r[1] }));
+
+    const prSummary = [['Findings before','8',''],['Confirmed','5',''],['Fixed','4','green'],['Requires review','1','amber'],['Rejected','3','red']].map(r => ({ l: r[0], v: r[1], c: r[2] ? `var(--${r[2]})` : 'var(--ink)' }));
+    const prT = tbl(['Finding','CWE','Severity','Before → After','Validation','Recommendation'],'1.5fr .7fr .8fr 1.5fr .9fr 1.3fr',
+      [['SQL injection','CWE-89','Critical','string concat → parameterized',P('Passed','green'),P('Merge','green')],['Path traversal','CWE-22','High','open(path) → safe_join()',P('Passed','green'),P('Merge','green')],['XSS in User.tsx','CWE-79','High','innerHTML → textContent',P('Passed','green'),P('Human review','amber')],['Command injection','CWE-78','Critical','shell=True → argv list',P('Failed','red'),P('Block','red')]]
+      .map(r => [B(r[0]), M(r[1]), sevP[r[2]], M(r[3]), r[4], r[5]]));
+
+    const policyRules = [['Critical findings','Block merge','red'],['High findings','Block merge','red'],['Medium findings','Review required','amber'],['Low findings','Allow','green'],['Autofix','Low-risk findings only','blue'],['Authentication changes','Human approval required','amber'],['CI/CD changes','Never autofix','red'],['Infrastructure changes','Human approval required','amber']]
+      .map(r => ({ k: r[0], v: r[1], style: pillStyle(r[2]) + ';justify-self:start' }));
+    const scopes = [['org','acme'],['repo','payments-*'],['branch','main'],['type','injection'],['severity','≥ medium'],['cwe','CWE-89'],['path','src/**']].map(r => ({ k: r[0], v: r[1] }));
+    const versions = [['v7','Tightened high severity to block','k.yevingy · today 14:21'],['v6','Added CI/CD never-autofix','m.alvarez · Sep 30'],['v5','Scoped to release branches','k.yevingy · Sep 12']].map(r => ({ v: r[0], t: r[1], m: r[2] }));
+
+    const ig = (name, status, meta, btn) => ({ name, status: status === 'ok' ? '✓ Connected' : '– Not connected', pill: pillStyle(status === 'ok' ? 'green' : 'grey'), meta, btn: status === 'ok' ? 'Configure' : 'Connect', go: this.setP(status === 'ok' ? 'wizard' : 'wizard') });
+    const integ = [
+      { cat:'Source control', items:[ig('GitHub','ok','Repositories 12\nLast event 2 min ago'),ig('GitLab','ok','Repositories 4\nLast event 41 min ago'),ig('Bitbucket','no','Not configured')] },
+      { cat:'CI/CD', items:[ig('GitHub Actions','ok','Workflows 18\nLast event 6 min ago'),ig('GitLab CI','no',''),ig('Jenkins','ok','Jobs 7\nLast event 2 h ago'),ig('Azure DevOps','no','')] },
+      { cat:'Notifications', items:[ig('Slack','ok','Channels 3\nLast event 14 min ago'),ig('Microsoft Teams','no',''),ig('Email','ok','SMTP relay\nLast event 1 h ago')] },
+      { cat:'Ticketing', items:[ig('Jira','ok','Projects 2\nLast event 1 h ago'),ig('Linear','no',''),ig('ServiceNow','no','')] },
+      { cat:'Security', items:[ig('DefectDojo','no',''),ig('SIEM','ok','Splunk HEC\nLast event 3 min ago'),ig('Snyk','no',''),ig('Dependency scanners','no','')] },
+    ];
+    const wizDef = [['Select provider','Choose the system to connect.',['GitHub','GitLab','Bitbucket']],['Authentication','Choose how SAST Autofix authenticates. Secrets are stored encrypted and masked after saving.',['OAuth','API token','Webhook secret','SSH key']],['Permissions','Read repository contents and metadata. Write pull requests and branches only. No access to organization settings or secrets.',['contents: read','pull_requests: write','checks: write']],['Repository selection','Limit scanning scope.',['All repositories','Selected repositories (12)']],['Events','Events that trigger scans.',['Push','Pull request','Merge','Branch creation','Workflow completion']],['Test connection','Verifying access.',['Authentication','Repository access','Webhook delivery','Permissions']],['Complete','GitHub is connected. First scan is queued for 12 repositories.',[]]];
+    const wi = s.wiz, wd = wizDef[wi];
+    const wizSteps = wizDef.map((d, i) => ({ n: i + 1, t: d[0], style: `padding:4px 10px;border-radius:999px;font-size:12px;border:1px solid var(--line);background:${i === wi ? 'var(--ink)' : i < wi ? 'var(--greenbg)' : 'var(--card)'};color:${i === wi ? 'var(--bg)' : i < wi ? 'var(--green)' : 'var(--mute)'}` }));
+    const wiz = { title: wd[0], text: wd[1], next: wi === 6 ? 'Go to integrations' : 'Continue',
+      items: wd[2].map((t, i) => ({ t, mark: wi === 5 ? '✓' : (i === 0 || wi === 4 ? '✓' : ''), box: `width:18px;height:18px;border-radius:${wi === 1 || wi === 0 ? '50%' : '5px'};border:1px solid var(--line);display:grid;place-items:center;font-size:11px;${(i === 0 || wi === 4 || wi === 5) ? 'background:var(--ink);color:var(--bg)' : ''}` })) };
+
+    const models = [
+      { name:'Ollama', rows:[['Status','ONLINE'],['Model','qwen3.5:35b-a3b'],['Runtime','DGX Spark'],['Temperature','0'],['Seed','42'],['Latency','1.8s'],['Context','32,768 tokens'],['Location','Local · no egress']], actions:['Test model','Change model','Configure parameters','Run benchmark'] },
+      { name:'Laya', rows:[['Status','ONLINE'],['Role','Decision orchestration'],['Version','2.4.1'],['Avg decision latency','0.6s'],['Decisions today','412'],['Mean confidence','86%']], actions:['Test model','View health'] },
+    ].map(m => ({ name: m.name, rows: m.rows.map(r => ({ k: r[0], v: r[1] })), actions: m.actions.map(t => ({ t, go: actDone(t + ' — started') })) }));
+
+    const barS = (c, w) => `height:8px;border-radius:4px;background:var(--${c});width:${w}%`;
+    const repKpis = [['Mean time to remediate','3h 12m'],['Autofix success','71.4%'],['False-positive rate','9.8%'],['Validation failures','6.1%'],['Gate failures','14']].map(r => ({ l: r[0], v: r[1] }));
+    const cb = (title, arr, c) => ({ title, bars: arr.map(r => ({ l: r[0], v: r[1], bar: barS(c, r[1] / Math.max(...arr.map(x => x[1])) * 100) })) });
+    const charts = [cb('Findings by CWE',[['CWE-89',24],['CWE-79',18],['CWE-78',9],['CWE-22',7],['CWE-798',5]],'blue'), cb('Findings by repository',[['payments-api',23],['web-frontend',14],['sast-poc-vuln-app',8],['infra-deploy',6]],'blue'), cb('AI confidence distribution',[['90–100%',34],['80–89%',21],['70–79%',9],['< 70%',6]],'green')];
+    const healthKpis = [['Queue depth','4',''],['Active runs','1',''],['Failed runs','1','var(--red)'],['Model latency','1.8s',''],['Uptime','99.97%','']].map(r => ({ l: r[0], v: r[1], c: r[2] || 'var(--ink)' }));
+    const resources = [['CPU',78,'amber'],['GPU',61,'blue'],['VRAM',72,'blue'],['Memory',64,'blue'],['Disk',41,'green']].map(r => ({ l: r[0], v: r[1], bar: barS(r[2], r[1]) }));
+    const services = ['Semgrep','Ollama','Laya','Policy Engine','Webhook Service','GitHub Connector','Database','Queue'].map((n, i) => ({ n, u: ['99.99%','99.95%','99.98%','100%','99.91%','99.97%','100%','99.99%'][i] }));
+
+    const act = {
+      scan: actDone('Scan queued for 12 repositories'), integ: this.setP('wizard'),
+      fix: actDone('Fix generation started · AI GENERATED'), assign: actDone('Assigned to m.alvarez'), issue: actDone('Jira issue SEC-2291 created'),
+      fp: this.ask('Mark as false positive?', 'This finding will be closed and the decision recorded in the audit log.', 'Mark false positive', 'Marked as false positive'),
+      suppress: this.ask('Suppress finding?', 'The finding is hidden until the suppression expires. This is recorded in the audit log.', 'Suppress', 'Finding suppressed'),
+      github: actDone('Opening GitHub…'), approve: this.ask('Approve security exception?', 'The security gate will pass for PR #184 despite 1 unresolved finding.', 'Approve exception', 'Exception approved'),
+      policyHistory: actDone('Showing version history'), policySave: this.ask('Publish policy v8?', 'The new policy applies to 9 repositories immediately.', 'Publish', 'Policy v8 published'),
+      csv: actDone('Exported report.csv'), json: actDone('Exported report.json'), pdf: actDone('Exported report.pdf'),
+    };
+
+    const p = {}; ['overview','finding','run','pr','policies','integrations','wizard','models','reports','health'].forEach(k => p[k] = s.page === k); p.table = !!cur;
+    const ov = { repos: ovRepos, runs: ovRuns };
+    const card = 'border:1px solid var(--line);border-radius:14px;background:var(--card);padding:18px;min-width:0';
+    return {
+      rootStyle, authed: s.authed, login: () => this.setState({ authed: true }), lifecycle, nav, crumb: crumbs[s.page] || '', p,
+      themeLabel: dark ? 'Light' : 'Dark', toggleDark: () => this.setState({ dark: !dark }), role, setRole: (e) => this.setState({ role: e.target.value }),
+      goNotifications: this.setP('notifications'), btn, btnPrimary, card, cardH: 'font-weight:600;font-size:14px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;gap:8px',
+      aiTag: 'font-family:var(--mono);font-size:10px;letter-spacing:.06em;padding:2px 7px;border-radius:5px;border:1px solid var(--blue);color:var(--blue);font-weight:500',
+      pillRed: pillStyle('red'), pillGreen: pillStyle('green'), act, can, kpis, posture, activity, ov, tb, settingsTabs,
+      code, flow, context, qa, stages, stageInfo, before, after, checks, prov, prSummary, prT, policyRules, scopes, versions, integ, wizSteps, wiz,
+      wizBack: () => this.setState({ wiz: Math.max(0, wi - 1) }), wizNext: () => wi === 6 ? this.setState({ page: 'integrations', wiz: 0 }) : this.setState({ wiz: wi + 1 }),
+      models, repKpis, charts, healthKpis, resources, services,
+      goRun: this.setP('run'), goPR: this.setP('pr'),
+      confirm: s.confirm, closeConfirm: () => this.setState({ confirm: null }),
+      okConfirm: () => { const d = s.confirm.done; this.setState({ confirm: null }); this.say(d); },
+      toast: s.toast,
+    };
+  }
+}
+</script>
+</body>
+</html>

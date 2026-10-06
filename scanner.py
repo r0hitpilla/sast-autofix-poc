@@ -31,6 +31,31 @@ def clean_rule_id(check_id: str) -> str:
     return check_id
 
 
+LEVELS = {"LOW": 1, "MEDIUM": 2, "HIGH": 3}
+BASIC_SEVERITY = {"ERROR": "High", "WARNING": "Medium", "INFO": "Low"}
+
+
+def severity_of(extra: dict) -> str:
+    """Critical / High / Medium / Low from Semgrep's own risk model.
+
+    Security rules carry `impact` and `likelihood` (LOW/MEDIUM/HIGH); their
+    combination is the rule author's risk call. Rules without them fall back
+    to Semgrep's basic ERROR/WARNING/INFO severity.
+    """
+    metadata = extra.get("metadata", {})
+    impact = LEVELS.get(str(metadata.get("impact", "")).upper())
+    likelihood = LEVELS.get(str(metadata.get("likelihood", "")).upper())
+    if impact and likelihood:
+        if impact == 3 and likelihood == 3:
+            return "Critical"
+        if impact == 3 or (impact == 2 and likelihood == 3):
+            return "High"
+        if impact == 2:
+            return "Medium"
+        return "Low"
+    return BASIC_SEVERITY.get(str(extra.get("severity", "")).upper(), "Medium")
+
+
 def parse_semgrep_json(raw_json: str, target_repo: str | None = None) -> list[Finding]:
     data = json.loads(raw_json)
     findings = []
@@ -57,6 +82,9 @@ def parse_semgrep_json(raw_json: str, target_repo: str | None = None) -> list[Fi
             cwe=cwe,
             message=extra.get("message", ""),
             snippet=snippet,
+            severity=severity_of(extra),
+            owasp=list(metadata.get("owasp", [])),
+            end_line=result.get("end", result["start"])["line"],
         ))
     return findings
 

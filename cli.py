@@ -5,6 +5,7 @@ import os
 import sys
 import time
 from contextlib import contextmanager
+from datetime import datetime, timezone
 
 import git
 from github import Auth, Github
@@ -22,6 +23,7 @@ from pr import (
     open_or_update_pr,
     set_commit_status,
 )
+from provenance import provenance
 from report import FindingRecord, RunReport, write_report
 from scanner import scan
 from triage import triage_finding
@@ -70,11 +72,13 @@ def triage_all(findings, target_repo, cfg, ollama, laya):
                   file=sys.stderr, flush=True)
             results.append(dataclasses.replace(earlier, finding=f))
             continue
+        context = numbered_context(target_repo, f)
         result = triage_finding(
             f, ollama, laya, cfg.threshold_fix, cfg.threshold_review,
             max_rounds=cfg.triage_max_rounds,
-            context=numbered_context(target_repo, f),
+            context=context,
         )
+        result = dataclasses.replace(result, context=context)
         asked = len(result.evidence) - 1 if result.evidence else 0
         print(
             f"    Laya asked the LLM {asked} follow-up question(s) -> "
@@ -118,6 +122,13 @@ def fix_branch_residual(report: RunReport) -> list:
     return [f for f in report.residual if (f.rule_id, f.file) not in rejected]
 
 
+def _pr_number(url: str | None) -> int | None:
+    try:
+        return int(str(url).rstrip("/").rsplit("/", 1)[-1])
+    except ValueError:
+        return None
+
+
 def run_url(repo_full_name: str) -> str | None:
     run_id = os.environ.get("GITHUB_RUN_ID")
     server = os.environ.get("GITHUB_SERVER_URL", "https://github.com")
@@ -158,6 +169,24 @@ def run_pipeline(
 
     report = RunReport(target=f"{repo_full_name if not dry_run else target_repo} @ {base_branch}")
     timings = report.timings
+    started = datetime.now(timezone.utc)
+    report.meta = {
+        "run": {
+            "id": os.environ.get("GITHUB_RUN_ID") or f"local-{started:%Y%m%d-%H%M%S}",
+            "url": run_url(repo_full_name),
+            "trigger": os.environ.get("GITHUB_EVENT_NAME", "local"),
+            "repository": repo_full_name,
+            "base_branch": base_branch,
+            "fix_branch": fix_branch,
+            "commit": repo.head.commit.hexsha,
+            "mode": "check-only" if check_only else "fix",
+            "dry_run": dry_run,
+            "started_at": started.isoformat(),
+        },
+        "provenance": provenance(cfg),
+        "pull_request": None,
+        "fix_branch_status": None,
+    }
 
     with timed(timings, "scan"):
         findings = scan(target_repo, cfg.semgrep_rulesets)
@@ -362,15 +391,23 @@ def run_pipeline(
     # (GitHub never does for pushes made with the Actions token), but this
     # run already rescanned SV-fix: publish that as the fix commit's check.
     remaining = fix_branch_residual(report)
-    set_commit_status(
-        github_client, repo_full_name, repo.head.commit.hexsha,
-        state="failure" if remaining else "success",
-        description=(
+    status = {
+        "sha": repo.head.commit.hexsha,
+        "state": "failure" if remaining else "success",
+        "description": (
             f"Rescan of {fix_branch}: {len(remaining)} confirmed finding(s) remain"
             if remaining else f"Rescan of {fix_branch}: no confirmed findings remain"
         ),
+    }
+    set_commit_status(
+        github_client, repo_full_name, status["sha"],
+        state=status["state"], description=status["description"],
         target_url=run_url(repo_full_name),
     )
+    report.meta["fix_branch_status"] = status
+    report.meta["pull_request"] = {
+        "url": url, "number": _pr_number(url), "head": fix_branch, "base": base_branch,
+    }
     report.pr_urls.append(url)
     print(f"PR: {url}")
     print("Report:", write_report(report, report_dir))
