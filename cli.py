@@ -235,7 +235,7 @@ def run_pipeline(
         if unresolved:
             print(f"{len(unresolved)} confirmed finding(s) need a developer — see the report.")
         print("Report:", write_report(report, report_dir))
-        return
+        return report
 
     commit_validated_findings(repo, entries, fix_branch)
 
@@ -259,7 +259,7 @@ def run_pipeline(
         # Leave the local repo where we found it; the commit stays on its branch.
         repo.git.checkout(base_branch)
         print("Report:", write_report(report, report_dir))
-        return
+        return report
 
     # --force: SV-fix is owned by this tool and rebuilt from the latest SV on
     # every scan; a previous run's version of it is meant to be replaced.
@@ -271,6 +271,7 @@ def run_pipeline(
     report.pr_urls.append(url)
     print(f"PR: {url}")
     print("Report:", write_report(report, report_dir))
+    return report
 
 
 def cmd_fix(args):
@@ -289,14 +290,27 @@ def cmd_fix(args):
     print(json.dumps([dataclasses.asdict(r) for r in results], indent=2, default=str))
 
 
+def run_and_gate(args):
+    report = run_pipeline(args.target_repo, args.config, args.dry_run, args.report_dir,
+                          args.base_branch, args.fix_branch)
+    if args.fail_on_findings and report is not None and report.blocking:
+        # The branch itself still contains these until the developer merges
+        # the fix PR (or resolves them by hand); fail so a required status
+        # check on main blocks the merge until a rescan comes back clean.
+        print(
+            f"Merge gate: {len(report.blocking)} confirmed finding(s) still on "
+            "this branch — failing the check.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+
 def cmd_pr(args):
-    run_pipeline(args.target_repo, args.config, args.dry_run, args.report_dir,
-                 args.base_branch, args.fix_branch)
+    run_and_gate(args)
 
 
 def cmd_run(args):
-    run_pipeline(args.target_repo, args.config, args.dry_run, args.report_dir,
-                 args.base_branch, args.fix_branch)
+    run_and_gate(args)
 
 
 def build_parser():
@@ -325,6 +339,9 @@ def build_parser():
                            help="developer branch to scan, e.g. SV (default: current branch)")
     pr_parser.add_argument("--fix-branch", default=None,
                            help="branch to push fixes to (default: <base-branch>-fix)")
+    pr_parser.add_argument("--fail-on-findings", action="store_true", default=False,
+                           help="exit 1 if confirmed findings remain on the scanned branch "
+                                "(use as a required status check before merging to main)")
     pr_parser.set_defaults(func=cmd_pr)
 
     run_parser = sub.add_parser("run", help="Full pipeline: scan -> triage -> fix -> validate -> pr")
@@ -336,6 +353,9 @@ def build_parser():
                            help="developer branch to scan, e.g. SV (default: current branch)")
     run_parser.add_argument("--fix-branch", default=None,
                            help="branch to push fixes to (default: <base-branch>-fix)")
+    run_parser.add_argument("--fail-on-findings", action="store_true", default=False,
+                           help="exit 1 if confirmed findings remain on the scanned branch "
+                                "(use as a required status check before merging to main)")
     run_parser.set_defaults(func=cmd_run)
 
     return parser

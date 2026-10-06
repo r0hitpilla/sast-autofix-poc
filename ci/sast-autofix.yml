@@ -62,7 +62,8 @@ jobs:
             --config "$SAST_AUTOFIX_HOME/config.yaml" \
             run --target-repo "$GITHUB_WORKSPACE" \
             --base-branch "$GITHUB_REF_NAME" \
-            --report-dir "$RUNNER_TEMP/sast-autofix"
+            --report-dir "$RUNNER_TEMP/sast-autofix" \
+            --fail-on-findings
 
       - name: Upload run report
         if: always()

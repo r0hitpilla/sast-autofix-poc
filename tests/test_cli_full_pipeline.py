@@ -278,3 +278,34 @@ def test_run_pipeline_scans_developer_branch_and_targets_its_fix_branch(tmp_path
     mock_repo.git.push.assert_called_once_with("--force", "origin", "SV-fix:SV-fix")
     assert mock_pr.call_args.kwargs["head"] == "SV-fix"
     assert mock_pr.call_args.kwargs["base"] == "SV"
+
+
+def test_merge_gate_fails_while_confirmed_findings_remain(tmp_path):
+    from cli import main
+    from report import FindingRecord, RunReport
+
+    finding = make_finding()
+    report = RunReport(target="t")
+    report.records.append(FindingRecord(
+        TriageResult(finding=finding, llm_reasoning="r", laya_score=0.9, route="fix"),
+        "fixed and validated",
+    ))
+
+    with patch("cli.run_pipeline", return_value=report):
+        with pytest.raises(SystemExit) as exc:
+            main(["run", "--target-repo", str(tmp_path), "--fail-on-findings"])
+    assert exc.value.code == 1
+
+
+def test_merge_gate_passes_when_only_false_positives_remain(tmp_path):
+    from cli import main
+    from report import FindingRecord, RunReport
+
+    report = RunReport(target="t")
+    report.records.append(FindingRecord(
+        TriageResult(finding=make_finding(), llm_reasoning="r", laya_score=0.1, route="reject"),
+        "rejected (likely false positive)",
+    ))
+
+    with patch("cli.run_pipeline", return_value=report):
+        main(["run", "--target-repo", str(tmp_path), "--fail-on-findings"])  # no SystemExit

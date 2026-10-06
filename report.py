@@ -35,6 +35,16 @@ class RunReport:
         return self.count(lambda r: r.triage.route == "fix")
 
     @property
+    def blocking(self) -> list[FindingRecord]:
+        """Confirmed (or unsure) findings still present on the scanned branch.
+
+        Fixes live on the -fix branch, not the scanned one, so a finding the
+        run fixed still blocks until that fix is merged and a rescan is clean.
+        Only findings Laya rejected as false positives don't block.
+        """
+        return [r for r in self.records if r.triage.route in ("fix", "review")]
+
+    @property
     def fixed(self) -> int:
         return self.count(lambda r: r.validation is not None and r.validation.validated)
 
@@ -63,6 +73,17 @@ def to_markdown(report: RunReport) -> str:
     ]
     if report.pr_urls:
         lines += ["**Pull requests:** " + ", ".join(report.pr_urls), ""]
+    if report.blocking:
+        lines += [
+            f"**Merge gate: ❌ {len(report.blocking)} confirmed finding(s) are still on "
+            "this branch.** Merge the fix PR (and resolve anything it lists as not "
+            "auto-fixed); the rescan of that push will clear this check.",
+            "",
+        ]
+    elif report.records:
+        lines += ["**Merge gate: ✅ no confirmed findings on this branch.**", ""]
+    else:
+        lines += ["**Merge gate: ✅ no findings.**", ""]
 
     lines += [
         "## Findings",
