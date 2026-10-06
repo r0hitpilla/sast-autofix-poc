@@ -5,6 +5,7 @@ import sys
 import pyflakes.api
 import pyflakes.messages
 
+from code_context import dependency_summary
 from fix_review import file_diff, review_fix
 from fixer import fix_finding, remove_created, restore_file
 from models import Finding, FixResult, ValidationResult
@@ -221,7 +222,9 @@ def _assess(
         diff += file_diff(path, "", _read(target_repo, path))
     if tests_passed and not still_present:
         if review:
-            approved, reason = review_fix(ollama, finding, diff)
+            approved, reason = review_fix(
+                ollama, finding, diff, dependency_summary(target_repo)
+            )
             print(f"    [fix review] {'APPROVE' if approved else 'REJECT'}: {reason[:150]}",
                   file=sys.stderr, flush=True)
             if not approved:

@@ -175,3 +175,9 @@ def test_import_hunk_is_attributed_to_the_fix_that_added_it():
     per_entry, unassigned = assign_hunks(entries, [import_hunk])
 
     assert per_entry[1] == [import_hunk] and per_entry[0] == [] and unassigned == []
+
+
+def test_reviewer_is_told_which_libraries_exist():
+    from fix_review import build_review_prompt
+    prompt = build_review_prompt(make_finding(), "diff", "requirements.txt:\nFlask>=3.0.0")
+    assert "Flask>=3.0.0" in prompt and "cannot add packages" in prompt

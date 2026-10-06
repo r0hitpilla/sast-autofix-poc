@@ -26,14 +26,21 @@ def file_diff(file: str, before: str | None, after: str | None) -> str:
     ))
 
 
-def build_review_prompt(finding: Finding, diff: str) -> str:
+def build_review_prompt(finding: Finding, diff: str, dependencies: str = "") -> str:
+    deps = (
+        "\nThe project's declared dependencies (plus the Python standard "
+        "library). When you REJECT, recommend a remedy available within "
+        f"these — the fixer cannot add packages:\n{dependencies}\n"
+        if dependencies else ""
+    )
     return (
         "You are a senior application-security reviewer. A developer tool "
         "proposed this change to fix a static analysis finding.\n\n"
         f"File: {finding.file}\n"
         f"CWE: {finding.cwe}\n"
         f"Finding: {finding.message}\n\n"
-        f"Proposed change:\n```diff\n{diff}\n```\n\n"
+        f"Proposed change:\n```diff\n{diff}\n```\n"
+        f"{deps}\n"
         "Judge ONE thing: after this change, is the weakness actually "
         "remediated, the way current best practice (e.g. the OWASP Cheat "
         "Sheets) would accept?\n"
@@ -51,14 +58,14 @@ def build_review_prompt(finding: Finding, diff: str) -> str:
     )
 
 
-def review_fix(ollama, finding: Finding, diff: str) -> tuple[bool, str]:
+def review_fix(ollama, finding: Finding, diff: str, dependencies: str = "") -> tuple[bool, str]:
     """(approved, reason). An unreachable or unparseable reviewer approves
     with a note: failing closed would burn every retry on a format slip, and
     the fix is still human-reviewed in the PR."""
     if not diff:
         return True, "no diff to review"
     try:
-        answer = ollama.generate(build_review_prompt(finding, diff))
+        answer = ollama.generate(build_review_prompt(finding, diff, dependencies))
     except Exception as exc:
         print(f"[fix review warning: reviewer call failed: {exc}]", file=sys.stderr)
         return True, "automated review unavailable"
