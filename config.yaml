@@ -10,10 +10,16 @@ laya:
 thresholds:
   fix: 0.8
   review: 0.4
+# Scanners run on every pass. semgrep: SAST. gitleaks: hard-coded secrets.
+# osv: vulnerable dependencies (osv-scanner).
+engines:
+  - semgrep
+  - gitleaks
+  - osv
 semgrep:
   rulesets:
     - p/security-audit
     - p/owasp-top-ten
     - rules/   # custom rules (e.g. Flask path traversal) the public packs miss
 fix_review: true    # LLM reviews each fix against best practice before accepting it
-max_fix_retries: 3   # LLM re-fix + rescan rounds after the first attempt
+max_fix_retries: 5   # LLM re-fix + rescan rounds after the first attempt (a fix must validate, not just exist)

@@ -19,6 +19,8 @@ class Config:
     fix_review: bool = True
     # Models used for fix attempts, rotated across retries.
     fix_models: list = None
+    # Scanners run on every pass: semgrep (SAST), gitleaks (secrets), osv (dependencies).
+    engines: tuple = ("semgrep",)
 
 
 def resolve_ruleset(ruleset: str, config_dir: str) -> str:
@@ -46,4 +48,5 @@ def load_config(path: str = "config.yaml") -> Config:
         triage_max_rounds=raw.get("laya", {}).get("max_rounds", 3),
         fix_review=raw.get("fix_review", True),
         fix_models=raw["ollama"].get("fix_models") or [raw["ollama"]["model"]],
+        engines=tuple(raw.get("engines", ["semgrep"])),
     )
