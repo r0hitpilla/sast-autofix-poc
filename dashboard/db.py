@@ -75,6 +75,10 @@ class FindingRow(Base):
     file: Mapped[str] = mapped_column(Text)
     line: Mapped[int] = mapped_column(Integer)
     end_line: Mapped[int | None] = mapped_column(Integer)
+    # CVSS base score (dependency advisories) and the pipeline's risk score;
+    # null for runs recorded before these existed.
+    cvss: Mapped[float | None] = mapped_column(Float)
+    risk: Mapped[float | None] = mapped_column(Float, index=True)
     message: Mapped[str] = mapped_column(Text)
     snippet: Mapped[str] = mapped_column(Text)
 

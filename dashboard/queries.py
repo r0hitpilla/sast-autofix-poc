@@ -190,6 +190,18 @@ def run_detail(session: Session, run_id: str) -> dict | None:
 
 # ---- findings --------------------------------------------------------------
 
+ADVISORY_BASE = "https://osv.dev/vulnerability/"
+
+
+def advisory_url(rule_id: str) -> str | None:
+    """Public advisory page for a dependency finding (osv.<id>); none otherwise."""
+    if not rule_id.startswith("osv."):
+        return None
+    advisory = rule_id[len("osv."):]
+    # OSV ids are plain tokens; anything else is not a link we should build.
+    return ADVISORY_BASE + advisory if re.fullmatch(r"[A-Za-z0-9._-]+", advisory) else None
+
+
 def finding_summary(row: FindingRow, run: Run | None = None) -> dict:
     run = run or row.run
     return {
@@ -197,6 +209,7 @@ def finding_summary(row: FindingRow, run: Run | None = None) -> dict:
         "severity": row.severity, "title": cwe_title(row.cwe), "cwe": cwe_id(row.cwe),
         "rule_id": row.rule_id, "repository": run.repository, "branch": run.base_branch,
         "file": row.file, "line": row.line, "verdict": verdict(row), "route": row.route,
+        "cvss": row.cvss, "risk": row.risk, "advisory_url": advisory_url(row.rule_id),
         "confidence": row.laya_score, "fix_status": fix_status(row), "outcome": row.outcome,
         "detected_at": iso(run.started_at),
     }
@@ -215,8 +228,13 @@ def list_findings(session: Session, state="open", repository=None, severity=None
         rows = [r for r in rows if r.severity == severity]
     if route:
         rows = [r for r in rows if r.route == route]
+    # Riskiest first. Rows without a risk score (recorded before it existed)
+    # fall back to severity order, after the scored ones.
     order = {s: i for i, s in enumerate(SEVERITIES)}
-    rows.sort(key=lambda r: (order.get(r.severity, 9), -(aware(r.run.started_at) or now()).timestamp()))
+    rows.sort(key=lambda r: (
+        r.risk is None, -(r.risk or 0.0), order.get(r.severity, 9),
+        -(aware(r.run.started_at) or now()).timestamp(),
+    ))
     return {"total": len(rows), "items": [finding_summary(r) for r in rows[offset:offset + limit]]}
 
 

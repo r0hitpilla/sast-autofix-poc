@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from models import Finding, TriageResult, ValidationResult
+from risk import risk_score
 
 
 @dataclass
@@ -137,6 +138,7 @@ def _record_json(r: FindingRecord) -> dict:
     return {
         "fingerprint": fingerprint(r.triage.finding),
         "finding": dataclasses.asdict(r.triage.finding),
+        "risk": risk_score(r.triage.finding),
         "triage": {
             "laya_score": r.triage.laya_score,
             "route": r.triage.route,

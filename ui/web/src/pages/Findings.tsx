@@ -61,6 +61,8 @@ export function Findings() {
                   { header: "Line", width: ".5fr", cell: (f) => <M>{f.line}</M> },
                   { header: "AI verdict", width: "1fr", cell: (f) => f.verdict },
                   { header: "Confidence", width: ".8fr", cell: (f) => <N>{pct(f.confidence, 0)}</N> },
+                  { header: "Risk", width: ".5fr", cell: (f) => <N>{f.risk == null ? "—" : f.risk.toFixed(1)}</N> },
+                  { header: "CVSS", width: ".5fr", cell: (f) => <N>{f.cvss == null ? "—" : f.cvss.toFixed(1)}</N> },
                   { header: "Fix status", width: "1fr", cell: (f) => <FixStatusPill status={f.fix_status} /> },
                 ]} />
               <div className="table-foot"><span>Showing {rows.length} of {d.total}</span></div>

@@ -173,6 +173,7 @@ def parse_osv_json(raw: str, target_repo: str | None = None) -> list[Finding]:
                     snippet=_read_line(target_repo, path, line) if target_repo else "",
                     severity=severity,
                     end_line=line,
+                    cvss=cvss,
                 ))
     return findings
 

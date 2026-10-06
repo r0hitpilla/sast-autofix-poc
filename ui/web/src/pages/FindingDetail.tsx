@@ -1,4 +1,5 @@
 import { Link, useParams } from "react-router-dom";
+import type { ReactNode } from "react";
 import type { FindingDetail as FindingData } from "../api/types";
 import { useApi } from "../api/useApi";
 import { CodeView, DiffView } from "../components/code";
@@ -66,10 +67,14 @@ export function FindingDetail() {
                   )}
                   <Card title="Context">
                     <div className="kv">
-                      {[["Repository", f.repository], ["Branch", f.branch], ["File", `${f.file}:${f.line}${f.end_line && f.end_line !== f.line ? `–${f.end_line}` : ""}`],
-                        ["Commit", shortSha(f.commit)], ["Rule", f.rule_id], ["CWE", f.cwe],
+                      {([["Repository", f.repository], ["Branch", f.branch], ["File", `${f.file}:${f.line}${f.end_line && f.end_line !== f.line ? `–${f.end_line}` : ""}`],
+                        ["Commit", shortSha(f.commit)],
+                        ["Rule", f.advisory_url ? <a href={f.advisory_url} target="_blank" rel="noreferrer">{f.rule_id}</a> : f.rule_id],
+                        ["CWE", f.cwe],
+                        ["CVSS", f.cvss == null ? "—" : f.cvss.toFixed(1)],
+                        ["Risk", f.risk == null ? "—" : f.risk.toFixed(1)],
                         ["OWASP", f.owasp.length ? f.owasp[f.owasp.length - 1] : "—"], ["First detected", dateTime(f.first_detected)],
-                        ["Last detected", dateTime(f.last_detected)], ["Times detected", String(f.times_detected)]]
+                        ["Last detected", dateTime(f.last_detected)], ["Times detected", String(f.times_detected)]] as [string, ReactNode][])
                         .map(([k, v]) => <div key={k}><div className="k">{k}</div><div className="v">{v}</div></div>)}
                     </div>
                   </Card>

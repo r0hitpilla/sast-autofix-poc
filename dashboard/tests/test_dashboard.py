@@ -202,3 +202,31 @@ def test_migrations_build_the_same_schema_as_the_models(tmp_path):
     insp = inspect(create_engine(url))
     for table in Base.metadata.tables.values():
         assert {c["name"] for c in insp.get_columns(table.name)} == {c.name for c in table.columns}
+
+
+def test_dependency_finding_carries_cvss_risk_and_advisory_link(Session):
+    from models import Finding, TriageResult, ValidationResult
+    from report import FindingRecord, RunReport, to_json
+
+    f = Finding(file="requirements.txt", line=1, rule_id="osv.PYSEC-2026-2151",
+                cwe="CWE-1395", message="flask 3.0.0 is affected", snippet="Flask>=3.0.0",
+                severity="Medium", end_line=1, cvss=4.3)
+    t = TriageResult(f, "r", 0.94, "fix")
+    rr = RunReport(target="o/r @ SV", records=[FindingRecord(t, "fixed and validated",
+                                                            ValidationResult(f, True, "ok", True))])
+    rr.meta = {"run": {"id": "d1", "repository": "o/r", "base_branch": "SV",
+                       "started_at": "2026-10-06T10:00:00+00:00", "finished_at": "2026-10-06T10:07:00+00:00"},
+               "gate": {"passed": True, "blocking": 0}, "provenance": {}}
+    run = ingest(json.loads(to_json(rr)), Session)
+
+    with Session() as s:
+        summary = queries.finding_summary(s.get(FindingRow, run.findings[0].id))
+    assert summary["cvss"] == 4.3
+    assert summary["risk"] is not None and summary["risk"] > 0
+    assert summary["advisory_url"] == "https://osv.dev/vulnerability/PYSEC-2026-2151"
+
+
+def test_advisory_url_only_for_osv_ids():
+    assert queries.advisory_url("osv.GHSA-68rp-wp8r-4726") == "https://osv.dev/vulnerability/GHSA-68rp-wp8r-4726"
+    assert queries.advisory_url("python.flask.security.open-redirect") is None
+    assert queries.advisory_url("osv.bad/../x") is None

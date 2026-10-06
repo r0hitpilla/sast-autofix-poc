@@ -25,6 +25,7 @@ export const finding: FindingDetail = {
   id: 5, run_id: "101", fingerprint: "abc", severity: "High", title: "Open Redirect", cwe: "CWE-601",
   rule_id: "python.flask.security.open-redirect.open-redirect", repository: "o/r", branch: "SV",
   file: "app.py", line: 117, verdict: "True positive", route: "fix", confidence: 0.89, fix_status: "Fixed",
+  cvss: null, risk: 4.5, advisory_url: null,
   outcome: "fixed and validated", detected_at: "2026-10-06T10:00:00+00:00",
   message: "Untrusted redirect target", owasp: ["A01:2021"], end_line: 117, snippet: "return redirect(next)",
   code: [{ n: 116, text: "    abort(401)", flagged: false }, { n: 117, text: "    return redirect(next)", flagged: true }],
