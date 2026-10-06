@@ -151,8 +151,10 @@ def test_review_parser_handles_markdown_bold_label():
     assert review_fix(ollama, make_finding(), "diff") == (True, "salted scrypt with per-user salt")
 
 
-def test_fix_prompt_says_only_this_file_can_change():
-    assert "cannot be created" in build_fix_prompt(make_finding())
+def test_fix_prompt_explains_how_to_create_a_new_file():
+    prompt = build_fix_prompt(make_finding())
+    assert "<<<<<<< NEW FILE" in prompt and "END FILE" in prompt
+    assert "Never reference a file that neither exists nor is created" in prompt
 
 
 def test_import_hunk_is_attributed_to_the_fix_that_added_it():

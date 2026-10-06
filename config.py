@@ -17,6 +17,8 @@ class Config:
     triage_max_rounds: int = 3
     # LLM security review of each fix before it is accepted.
     fix_review: bool = True
+    # Models used for fix attempts, rotated across retries.
+    fix_models: list = None
 
 
 def resolve_ruleset(ruleset: str, config_dir: str) -> str:
@@ -43,4 +45,5 @@ def load_config(path: str = "config.yaml") -> Config:
         max_fix_retries=raw["max_fix_retries"],
         triage_max_rounds=raw.get("laya", {}).get("max_rounds", 3),
         fix_review=raw.get("fix_review", True),
+        fix_models=raw["ollama"].get("fix_models") or [raw["ollama"]["model"]],
     )

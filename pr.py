@@ -290,7 +290,9 @@ def commit_validated_findings(repo, entries, fix_branch: str) -> str:
     """
     validated_entries = [(t, v) for t, v in entries if v.validated]
     repo.git.checkout("-B", fix_branch)
-    for file in dict.fromkeys(t.finding.file for t, _ in validated_entries):
+    files = [t.finding.file for t, _ in validated_entries]
+    files += [path for _, v in validated_entries for path in v.created_files]
+    for file in dict.fromkeys(files):
         repo.git.add(file)
     _commit(repo, "fix: automated security fixes from sast-autofix-poc")
     return fix_branch

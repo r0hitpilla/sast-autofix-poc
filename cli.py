@@ -267,7 +267,9 @@ def run_pipeline(
             continue
 
         with timed(timings, "fix + rescan loop"):
-            fix_result = fix_finding(with_all_rules(finding, findings), ollama, repo)
+            fix_result = fix_finding(
+                with_all_rules(finding, findings), ollama, repo, model=cfg.fix_models[0],
+            )
             validation_result = validate_and_retry(
                 fix_result, ollama, repo, target_repo,
                 cfg.semgrep_rulesets, cfg.max_fix_retries,
@@ -275,6 +277,7 @@ def run_pipeline(
                 base_branch=base_branch,
                 review=cfg.fix_review,
                 known_rules={f.rule_id for f in findings if f.file == finding.file},
+                fix_models=cfg.fix_models,
                 retriage=lambda f: triage_finding(
                     f, ollama, laya, cfg.threshold_fix, cfg.threshold_review,
                     max_rounds=cfg.triage_max_rounds,

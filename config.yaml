@@ -1,6 +1,9 @@
 ollama:
   host: http://localhost:11434
-  model: qwen3.5:35b-a3b
+  model: qwen3.5:35b-a3b   # triage + review
+  fix_models:              # fix attempts rotate through these
+    - qwen3.5:35b-a3b
+    - qwen3-coder-aida:latest
 laya:
   model: convaiinnovations/laya
   max_rounds: 3   # follow-up questions Laya may ask the LLM per finding

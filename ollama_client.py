@@ -22,14 +22,14 @@ class OllamaClient:
         self.client = ollama.Client(host=host, timeout=REQUEST_TIMEOUT_SECONDS)
         self.model = model
 
-    def generate(self, prompt: str, think: bool | None = None) -> str:
+    def generate(self, prompt: str, think: bool | None = None, model: str | None = None) -> str:
         """`think=False` skips the model's hidden reasoning. Fix generation
         uses it: with reasoning on, qwen3.5 regularly ran into the output cap
         on edit prompts; without it, a correct edit takes ~2 s. `None` keeps
         the model's default (used for triage, where the reasoning helps)."""
         kwargs = {} if think is None else {"think": think}
         response = self.client.chat(
-            model=self.model,
+            model=model or self.model,
             messages=[{"role": "user", "content": prompt}],
             options=GENERATION_OPTIONS,
             **kwargs,

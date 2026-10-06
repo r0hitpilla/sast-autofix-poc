@@ -6,7 +6,7 @@ import pyflakes.api
 import pyflakes.messages
 
 from fix_review import file_diff, review_fix
-from fixer import fix_finding, restore_file
+from fixer import fix_finding, remove_created, restore_file
 from models import Finding, FixResult, ValidationResult
 from scanner import scan
 
@@ -121,6 +121,7 @@ def _check(
     baseline_count: int | None = None,
     baseline_content: str | None = None,
     known_rules: set | None = None,
+    created_files: list[str] | None = None,
 ):
     rescanned = scan(target_repo, semgrep_rulesets)
     still_present = finding_still_present(finding, rescanned, baseline_count)
@@ -128,9 +129,11 @@ def _check(
     if known_rules is not None:
         # A fix that trades one finding for another (escaping XSS via
         # render_template_string -> template injection) is not a fix.
+        created = set(created_files or [])
         introduced = [
             f for f in rescanned
-            if f.file == finding.file and f.rule_id not in known_rules
+            if (f.file == finding.file and f.rule_id not in known_rules)
+            or f.file in created  # anything flagged in a file the fix created is new
         ]
         if introduced:
             tests_passed = False
@@ -202,6 +205,7 @@ def _assess(
     ollama,
     review: bool,
     retriage,
+    created_files: list[str] = (),
 ) -> ValidationResult | str:
     """Accept the applied fix (-> ValidationResult) or say why not (-> feedback).
 
@@ -213,6 +217,8 @@ def _assess(
     - anything else -> feedback for the next attempt
     """
     diff = file_diff(finding.file, baseline, _read(target_repo, finding.file))
+    for path in created_files:
+        diff += file_diff(path, "", _read(target_repo, path))
     if tests_passed and not still_present:
         if review:
             approved, reason = review_fix(ollama, finding, diff)
@@ -226,6 +232,7 @@ def _assess(
         return ValidationResult(
             finding=finding, clean=True, test_output=test_output,
             validated=True, attempts=attempts, fix_diff=diff,
+            created_files=list(created_files),
         )
 
     if tests_passed and still_present and retriage is not None and remaining:
@@ -237,7 +244,7 @@ def _assess(
             return ValidationResult(
                 finding=finding, clean=False, test_output=test_output,
                 validated=True, attempts=attempts, note=SCANNER_STILL_FLAGS_NOTE,
-                fix_diff=diff,
+                fix_diff=diff, created_files=list(created_files),
             )
 
     return build_feedback(
@@ -257,6 +264,7 @@ def validate_and_retry(
     review: bool = False,
     retriage=None,
     known_rules: set | None = None,
+    fix_models: list[str] | None = None,
 ) -> ValidationResult:
     """Validate an already-applied fix; on failure feed the reason back to the
     LLM for a new fix, up to `max_retries` more attempts.
@@ -285,12 +293,13 @@ def validate_and_retry(
             # Every attempt gets validated, including the last one.
             still_present, tests_passed, test_output, remaining = _check(
                 target_repo, semgrep_rulesets, finding, baseline_count, baseline,
-                known_rules,
+                known_rules, current_fix.created_files,
             )
             _progress(finding, attempts, still_present, tests_passed)
             outcome = _assess(
                 finding, target_repo, baseline, still_present, tests_passed,
                 test_output, remaining, attempts, ollama, review, retriage,
+                current_fix.created_files,
             )
             if isinstance(outcome, ValidationResult):
                 return outcome
@@ -300,8 +309,12 @@ def validate_and_retry(
 
         if attempts > max_retries:
             break
+        # Rotate models across retries: models fail differently, so a fix
+        # one keeps getting wrong is often one another gets right.
+        model = fix_models[attempts % len(fix_models)] if fix_models else None
         current_fix = fix_finding(
-            finding, ollama, repo, retry_feedback=feedback, baseline=baseline
+            finding, ollama, repo, retry_feedback=feedback, baseline=baseline,
+            model=model, cleanup=current_fix.created_files,
         )
         attempts += 1
         last_proposal = current_fix.diff or last_proposal
@@ -313,6 +326,7 @@ def validate_and_retry(
     # restore_file rewinds to the pre-fix snapshot rather than HEAD, so any
     # earlier validated-but-uncommitted fix in the SAME file survives.
     restore_file(repo, finding.file, baseline)
+    remove_created(repo, current_fix.created_files)
     repo.git.checkout(base_branch)
     if not current_fix.applied:
         failure = "no usable fix"

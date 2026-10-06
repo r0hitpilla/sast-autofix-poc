@@ -34,6 +34,8 @@ class FixResult:
     baseline: str | None = None
     # Why the fix didn't apply, in words the LLM can act on during a retry.
     error: str = ""
+    # New files this attempt created (e.g. a template), repo-relative.
+    created_files: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -55,6 +57,8 @@ class ValidationResult:
     # The accepted fix as a unified diff against the file just before it, so
     # PR hunks can be attributed to the fix that made them.
     fix_diff: str = ""
+    # New files the accepted fix created; committed alongside the fix.
+    created_files: list[str] = field(default_factory=list)
 
 
 @dataclass

@@ -32,9 +32,17 @@ Use a separate block for each separate place you change. If you need a new
 import, add it next to the file's existing imports at the top (its own edit
 block), never inside a function, and never re-import a name the file already
 imports. Every name the new code uses must still be defined: do not delete
-lines other code depends on. You can only change this one file: do not
-reference files that don't exist yet (new templates, modules, config files),
-because they cannot be created — fix the code in place."""
+lines other code depends on.
+
+If the right fix needs a NEW file (for example a template the code renders),
+create it with a block in exactly this format (path relative to the
+repository root, the file must not exist yet):
+
+<<<<<<< NEW FILE templates/example.html
+(the complete content of the new file)
+>>>>>>> END FILE
+
+Never reference a file that neither exists nor is created by your reply."""
 
 
 def build_fix_prompt(
@@ -76,6 +84,49 @@ EDIT_BLOCK_RE = re.compile(
     r"^<{5,9} ?ORIGINAL[^\n]*\n(.*?)^={5,9}[^\n]*\n(.*?)^>{5,9}[^\n]*$",
     re.DOTALL | re.MULTILINE,
 )
+
+
+NEW_FILE_RE = re.compile(
+    r"^<{5,9} ?NEW FILE:?[ \t]+(\S+)[^\n]*\n(.*?)^>{5,9} ?END FILE[^\n]*$",
+    re.DOTALL | re.MULTILINE,
+)
+PROTECTED_NEW_FILE_PREFIXES = (".github/", ".git/")
+
+
+def extract_new_files(model_output: str) -> list[tuple[str, str]]:
+    return [(path.strip().strip("`"), body) for path, body in NEW_FILE_RE.findall(model_output)]
+
+
+def new_file_problem(repo, path: str) -> str | None:
+    """Why `path` may not be created, or None if it may.
+
+    New files are allowed so a fix can, e.g., move an inline HTML string into
+    an auto-escaping template. They are kept inside the repository, never
+    overwrite anything, and never touch CI configuration.
+    """
+    root = os.path.realpath(repo.working_tree_dir)
+    full = os.path.realpath(os.path.join(root, path))
+    if os.path.isabs(path) or not full.startswith(root + os.sep):
+        return f"{path} is outside the repository"
+    rel = os.path.relpath(full, root)
+    if rel.startswith(PROTECTED_NEW_FILE_PREFIXES):
+        return f"{path}: CI/repository configuration can't be created by a fix"
+    if os.path.exists(full):
+        return f"{path} already exists; edit it with ORIGINAL/FIXED blocks instead"
+    return None
+
+
+def remove_created(repo, paths: list[str]) -> None:
+    """Delete files an earlier attempt created (and any directories that
+    are left empty), so a retry or a rejected fix leaves no trace."""
+    root = repo.working_tree_dir
+    for path in paths:
+        full = os.path.join(root, path)
+        try:
+            os.remove(full)
+            os.removedirs(os.path.dirname(full))
+        except OSError:
+            pass
 
 
 def extract_edits(model_output: str) -> list[tuple[str, str]]:
@@ -216,8 +267,13 @@ def fix_finding(
     repo,
     retry_feedback: str | None = None,
     baseline: str | None = None,
+    model: str | None = None,
+    cleanup: list[str] | None = None,
 ) -> FixResult:
+    """`model` overrides the LLM for this attempt (retries can rotate
+    models); `cleanup` lists files the previous attempt created."""
     branch = branch_name(finding)
+    remove_created(repo, cleanup or [])
 
     if retry_feedback is not None:
         # This is a retry: the previous attempt's rejected edits are still
@@ -232,8 +288,9 @@ def fix_finding(
     header = numbered_header(repo.working_tree_dir, finding.file)
 
     try:
+        extra = {"model": model} if model else {}
         model_output = ollama.generate(
-            build_fix_prompt(finding, retry_feedback, context, header), think=False
+            build_fix_prompt(finding, retry_feedback, context, header), think=False, **extra
         )
     except Exception as exc:
         # Spec: an Ollama call failure must never take the pipeline down —
@@ -253,7 +310,8 @@ def fix_finding(
     # routinely miscount unified-diff hunk headers ("corrupt patch"). A
     # fenced diff is still accepted as a fallback.
     edits = extract_edits(model_output)
-    if edits:
+    new_files = extract_new_files(model_output)
+    if edits or new_files:
         diff = model_output[model_output.index("<<<<<<<"):].strip()
     else:
         diff = extract_diff(model_output)
@@ -278,8 +336,19 @@ def fix_finding(
     # then stay where it was, not be stranded on a fresh fix branch that
     # every later finding would silently build on. Uncommitted edits carry
     # over to the branch on checkout.
-    if edits:
-        applied, error = apply_edits(repo, finding.file, edits)
+    problems = [p for p in (new_file_problem(repo, path) for path, _ in new_files) if p]
+    created = []
+    if problems:
+        applied, error = False, "Cannot create new file: " + "; ".join(problems)
+    elif edits or new_files:
+        applied, error = apply_edits(repo, finding.file, edits) if edits else (True, "")
+        if applied:
+            for path, body in new_files:
+                full = os.path.join(repo.working_tree_dir, path)
+                os.makedirs(os.path.dirname(full) or ".", exist_ok=True)
+                with open(full, "w", newline="") as f:
+                    f.write(body)
+                created.append(path)
     else:
         applied = apply_diff(repo, diff)
         error = "" if applied else (
@@ -290,5 +359,5 @@ def fix_finding(
 
     return FixResult(
         finding=finding, diff=diff, applied=applied, branch=branch,
-        baseline=baseline, error=error,
+        baseline=baseline, error=error, created_files=created,
     )
