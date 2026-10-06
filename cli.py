@@ -7,7 +7,7 @@ import time
 from contextlib import contextmanager
 
 import git
-from github import Github
+from github import Auth, Github
 
 from config import load_config
 from fixer import fix_finding
@@ -99,7 +99,7 @@ def run_pipeline(
     the developer's branch — never into main directly."""
     cfg = load_config(config_path)
     repo_full_name = os.environ.get("GITHUB_REPO", "r0hitpilla/sast-poc-vuln-app")
-    github_client = None if dry_run else Github(os.environ["GITHUB_TOKEN"])
+    github_client = None if dry_run else Github(auth=Auth.Token(os.environ["GITHUB_TOKEN"]))
 
     repo = git.Repo(target_repo)
     if base_branch:
