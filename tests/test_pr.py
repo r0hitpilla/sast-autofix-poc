@@ -104,3 +104,33 @@ def test_open_pr_creates_pull_request_when_not_dry_run():
     mock_repo.create_pull.assert_called_once_with(
         title="title", body="body", head="autofix/x", base="main"
     )
+
+
+def test_open_pr_posts_inline_line_comments_as_a_review():
+    github_client = MagicMock()
+    mock_repo = MagicMock()
+    mock_pr = MagicMock()
+    mock_pr.html_url = "https://github.com/o/r/pull/2"
+    mock_repo.create_pull.return_value = mock_pr
+    github_client.get_repo.return_value = mock_repo
+    comments = [{"path": "app.py", "line": 44, "side": "RIGHT", "body": "fix"}]
+
+    url = open_pr(github_client, "o/r", "autofix/x", "t", "b", dry_run=False, line_comments=comments)
+
+    assert url == "https://github.com/o/r/pull/2"
+    kwargs = mock_pr.create_review.call_args.kwargs
+    assert kwargs["event"] == "COMMENT"
+    assert kwargs["comments"] == comments
+
+
+def test_open_pr_keeps_pr_url_when_inline_review_fails():
+    github_client = MagicMock()
+    mock_pr = MagicMock()
+    mock_pr.html_url = "https://github.com/o/r/pull/3"
+    mock_pr.create_review.side_effect = RuntimeError("422 line not in diff")
+    github_client.get_repo.return_value.create_pull.return_value = mock_pr
+
+    url = open_pr(github_client, "o/r", "autofix/x", "t", "b", dry_run=False,
+                  line_comments=[{"path": "a", "line": 1, "side": "RIGHT", "body": "x"}])
+
+    assert url == "https://github.com/o/r/pull/3"

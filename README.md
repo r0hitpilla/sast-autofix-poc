@@ -1,7 +1,29 @@
 # sast-autofix-poc
 
-Local-LLM-powered pipeline: Semgrep scan -> Ollama + Laya triage -> Ollama
-fix -> re-scan/test validate -> GitHub PR. No cloud LLM calls.
+Local-LLM-powered pipeline: Semgrep scan -> Laya-driven triage (Laya asks
+the Ollama LLM for evidence) -> Ollama fix -> re-scan/test, re-fix until clean
+-> GitHub PR annotated line by line. No cloud LLM calls.
+
+## How it works
+
+1. **Triage, with Laya in the middle.** The LLM writes an initial analysis.
+   Each round, Laya scores the evidence so far and picks which question it
+   wants the LLM to answer next: input source, sanitization, reachability,
+   sink safety, or exploit. It stops once its score leaves the review band
+   or after `laya.max_rounds` questions. Laya's final score routes the
+   finding to fix (above `thresholds.fix`), review, or reject.
+2. **Remediate + rescan loop.** The LLM gets the numbered source around the
+   finding and returns a diff. The diff is applied, then Semgrep rescans and
+   tests run. If the finding is still there, the rescan result goes back to
+   the LLM for another attempt, up to `max_fix_retries` times. A fix that
+   never validates is rolled back to the file's pre-fix snapshot, so earlier
+   validated fixes in the same file survive. A final full rescan lists
+   anything left.
+3. **PR with exact lines.** The PR body has a "Changed lines" table. It maps
+   each finding to the exact lines changed (taken from the branch's real diff
+   against `main`, with links to those lines) and shows a was/now diff per
+   finding. An inline review comment is pinned to every changed range. A
+   change not tied to any finding is flagged separately.
 
 ## Setup (on the DGX Spark, where Ollama + Semgrep are already installed)
 

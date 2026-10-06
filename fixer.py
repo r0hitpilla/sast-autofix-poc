@@ -5,6 +5,7 @@ import tempfile
 
 from git.exc import GitCommandError
 
+from code_context import numbered_context
 from git_utils import checkout_branch
 from models import Finding, FixResult
 
@@ -18,7 +19,9 @@ def branch_name(finding: Finding) -> str:
     return f"autofix/{cwe_slug}-{file_slug}-{line_slug}"
 
 
-def build_fix_prompt(finding: Finding, retry_feedback: str | None = None) -> str:
+def build_fix_prompt(
+    finding: Finding, retry_feedback: str | None = None, context: str = ""
+) -> str:
     prompt = (
         "You are a security engineer writing a minimal fix for a single "
         "static analysis finding. Produce ONLY a unified diff patch for "
@@ -30,6 +33,13 @@ def build_fix_prompt(finding: Finding, retry_feedback: str | None = None) -> str
         f"Issue: {finding.message}\n\n"
         f"Vulnerable code:\n{finding.snippet}\n"
     )
+    if context:
+        prompt += (
+            "\nCurrent file contents around the finding (the number before "
+            "each '|' is the line number, not part of the code — use these "
+            "numbers for the @@ hunk header and copy context lines exactly):\n"
+            f"{context}\n"
+        )
     if retry_feedback:
         prompt += (
             "\nA previous attempt at this fix failed validation with this "
@@ -66,11 +76,54 @@ def apply_diff(repo, diff_text: str) -> bool:
             os.remove(path)
 
 
-def fix_finding(finding: Finding, ollama, repo, retry_feedback: str | None = None) -> FixResult:
+def read_file(repo, file: str) -> str | None:
+    try:
+        with open(os.path.join(repo.working_tree_dir, file), newline="") as f:
+            return f.read()
+    except OSError:
+        return None
+
+
+def restore_file(repo, file: str, baseline: str | None) -> None:
+    """Undo this finding's uncommitted edits to `file`.
+
+    Prefer the pre-fix snapshot: `git checkout -- file` would also throw away
+    every earlier validated-but-uncommitted fix in the same file (all three
+    sample_vuln_app findings live in app.py). HEAD is only the fallback when
+    no snapshot could be taken.
+    """
+    if baseline is not None:
+        with open(os.path.join(repo.working_tree_dir, file), "w", newline="") as f:
+            f.write(baseline)
+        return
+    try:
+        repo.git.checkout("--", file)
+    except GitCommandError as exc:
+        print(f"[fix warning: could not restore {file}: {exc}]", file=sys.stderr)
+
+
+def fix_finding(
+    finding: Finding,
+    ollama,
+    repo,
+    retry_feedback: str | None = None,
+    baseline: str | None = None,
+) -> FixResult:
     branch = branch_name(finding)
 
+    if retry_feedback is not None:
+        # This is a retry: the previous attempt's rejected edits are still
+        # sitting uncommitted in the working tree (fix branches never
+        # commit). Put the file back to its pre-fix state BEFORE prompting,
+        # so the model sees — and diffs against — the code it must patch.
+        restore_file(repo, finding.file, baseline)
+    else:
+        baseline = read_file(repo, finding.file)
+
+    context = numbered_context(repo.working_tree_dir, finding)
+
     try:
-        model_output = ollama.generate(build_fix_prompt(finding, retry_feedback))
+        model_output = ollama.generate(build_fix_prompt(finding, retry_feedback, context))
     except Exception as exc:
         # Spec: an Ollama call failure must never take the pipeline down —
         # log it and report the finding as unfixed so run_pipeline can skip
@@ -79,29 +132,20 @@ def fix_finding(finding: Finding, ollama, repo, retry_feedback: str | None = Non
             f"[fix error: ollama call failed for {finding.file}:{finding.line}: {exc}]",
             file=sys.stderr,
         )
-        return FixResult(finding=finding, diff="", applied=False, branch=branch)
+        return FixResult(
+            finding=finding, diff="", applied=False, branch=branch, baseline=baseline
+        )
 
     diff = extract_diff(model_output)
 
     if not diff:
-        return FixResult(finding=finding, diff="", applied=False, branch=branch)
+        return FixResult(
+            finding=finding, diff="", applied=False, branch=branch, baseline=baseline
+        )
 
     checkout_branch(repo, branch)
-
-    if retry_feedback is not None:
-        # This is a retry: the previous attempt's rejected edits are still
-        # sitting uncommitted in the working tree (fix branches never
-        # commit). The fresh diff was generated against the ORIGINAL
-        # snippet, so it would hit a context mismatch against those edits.
-        # Discard just this finding's file back to HEAD before re-applying.
-        try:
-            repo.git.checkout("--", finding.file)
-        except GitCommandError as exc:
-            print(
-                f"[fix warning: could not restore {finding.file} before retry: {exc}]",
-                file=sys.stderr,
-            )
-
     applied = apply_diff(repo, diff)
 
-    return FixResult(finding=finding, diff=diff, applied=applied, branch=branch)
+    return FixResult(
+        finding=finding, diff=diff, applied=applied, branch=branch, baseline=baseline
+    )

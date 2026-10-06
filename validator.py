@@ -1,7 +1,7 @@
 import os
 import subprocess
 
-from fixer import fix_finding
+from fixer import fix_finding, restore_file
 from models import Finding, FixResult, ValidationResult
 from scanner import scan
 
@@ -62,7 +62,32 @@ def _check(
     rescanned = scan(target_repo, semgrep_rulesets)
     still_present = finding_still_present(finding, rescanned, baseline_count)
     tests_passed, test_output = run_test_suite(target_repo)
-    return still_present, tests_passed, test_output
+    remaining_lines = sorted(
+        f.line for f in rescanned
+        if f.rule_id == finding.rule_id and f.file == finding.file
+    )
+    return still_present, tests_passed, test_output, remaining_lines
+
+
+def build_feedback(
+    finding: Finding,
+    still_present: bool,
+    remaining_lines: list[int],
+    tests_passed: bool,
+    test_output: str,
+) -> str:
+    parts = []
+    if still_present:
+        where = ", ".join(f"line {n}" for n in remaining_lines) or "the same place"
+        parts.append(
+            f"The rescan still flags {finding.rule_id} in {finding.file} at "
+            f"{where} — the vulnerability is not fixed."
+        )
+    else:
+        parts.append("The rescan no longer flags the finding.")
+    if not tests_passed:
+        parts.append(f"But the test suite now fails:\n{test_output[:2000]}")
+    return " ".join(parts)
 
 
 def validate_and_retry(
@@ -74,7 +99,8 @@ def validate_and_retry(
     max_retries: int,
     baseline_count: int | None = None,
 ) -> ValidationResult:
-    """Validate an already-applied fix, retrying up to `max_retries` times.
+    """Rescan + test an already-applied fix; on failure, feed the result back
+    to the LLM for a new fix and rescan again, up to `max_retries` times.
 
     `baseline_count` is how many (rule_id, file) matches the target repo was
     expected to hold immediately BEFORE this fix was applied — see
@@ -83,35 +109,35 @@ def validate_and_retry(
     one file counts as progress instead of burning every retry.
     """
     finding = fix_result.finding
-    current_fix = fix_result
+    baseline = fix_result.baseline
 
     # Validate the fix that was already applied before this call, before
     # spending any retries on it.
-    still_present, tests_passed, test_output = _check(
+    still_present, tests_passed, test_output, remaining_lines = _check(
         target_repo, semgrep_rulesets, finding, baseline_count
     )
-    last_output = test_output
+    attempts = 1
     if not still_present and tests_passed:
         return ValidationResult(
-            finding=finding,
-            clean=True,
-            test_output=test_output,
-            validated=True,
+            finding=finding, clean=True, test_output=test_output,
+            validated=True, attempts=attempts,
         )
 
     applied_note = ""
-    for attempt in range(max_retries):
-        feedback = (
-            f"Rescan still found the issue: {still_present}. "
-            f"Tests passed: {tests_passed}. Output: {test_output[:2000]}"
-            f"{applied_note}"
+    for _ in range(max_retries):
+        feedback = build_feedback(
+            finding, still_present, remaining_lines, tests_passed, test_output
+        ) + applied_note
+        current_fix = fix_finding(
+            finding, ollama, repo, retry_feedback=feedback, baseline=baseline
         )
-        current_fix = fix_finding(finding, ollama, repo, retry_feedback=feedback)
+        attempts += 1
 
         if not current_fix.applied:
             applied_note = (
                 " NOTE: the previous retry's diff failed to apply to the "
-                "repo at all — produce a diff that applies cleanly."
+                "repo at all — produce a diff that applies cleanly against "
+                "the numbered file contents shown above."
             )
         else:
             applied_note = ""
@@ -119,31 +145,25 @@ def validate_and_retry(
         # Every retry attempt gets validated, including the last one — a
         # fix that lands on the final retry must not be reverted just
         # because retries ran out before it could be checked.
-        still_present, tests_passed, test_output = _check(
+        still_present, tests_passed, test_output, remaining_lines = _check(
             target_repo, semgrep_rulesets, finding, baseline_count
         )
-        last_output = test_output
 
         if not still_present and tests_passed:
             return ValidationResult(
-                finding=finding,
-                clean=True,
-                test_output=test_output,
-                validated=True,
+                finding=finding, clean=True, test_output=test_output,
+                validated=True, attempts=attempts,
             )
 
     # The rejected fix's edits are still sitting uncommitted in the working
-    # tree (fix branches never commit — see fixer.fix_finding). Discard just
-    # this finding's file before leaving the branch, so a later validated
-    # finding in the SAME file can never pick up these unvalidated edits
-    # when pr.commit_validated_findings does `git add <file>`. Scoped to
-    # this one file (not `reset --hard`) so any other finding's already-
-    # validated-but-not-yet-committed edits elsewhere in the tree survive.
-    repo.git.checkout("--", finding.file)
+    # tree (fix branches never commit — see fixer.fix_finding). Undo just
+    # this finding's edits before leaving the branch, so
+    # pr.commit_validated_findings' `git add <file>` can never pick them up.
+    # restore_file rewinds to the pre-fix snapshot rather than HEAD, so any
+    # earlier validated-but-uncommitted fix in the SAME file survives.
+    restore_file(repo, finding.file, baseline)
     repo.git.checkout("main")
     return ValidationResult(
-        finding=finding,
-        clean=False,
-        test_output=last_output,
-        validated=False,
+        finding=finding, clean=False, test_output=test_output,
+        validated=False, attempts=attempts,
     )

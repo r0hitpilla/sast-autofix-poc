@@ -14,6 +14,8 @@ class Config:
     semgrep_rulesets: list
     pr_strategy: str
     max_fix_retries: int
+    # Max follow-up questions Laya may put to the LLM per finding.
+    triage_max_rounds: int = 3
 
 
 def load_config(path: str = "config.yaml") -> Config:
@@ -29,4 +31,5 @@ def load_config(path: str = "config.yaml") -> Config:
         semgrep_rulesets=raw["semgrep"]["rulesets"],
         pr_strategy=raw["pr"]["strategy"],
         max_fix_retries=raw["max_fix_retries"],
+        triage_max_rounds=raw.get("laya", {}).get("max_rounds", 3),
     )

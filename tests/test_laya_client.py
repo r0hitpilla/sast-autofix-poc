@@ -28,3 +28,37 @@ def test_true_positive_score_extracts_noul_value():
         assert "true_positive" in questions
         assert questions["true_positive"]["type"] == "noul"
         assert questions["true_positive"]["instructions"] == "is this a true positive security vulnerability"
+
+
+def test_assess_returns_score_and_chosen_next_question():
+    with patch("laya_client.laya.load") as mock_load:
+        mock_agent = MagicMock()
+        mock_agent.predict.return_value = {
+            "answers": {
+                "true_positive": {"noul": 0.55},
+                "next_question": {"choice": "sanitization"},
+            }
+        }
+        mock_load.return_value = mock_agent
+
+        client = LayaClient(model="convaiinnovations/laya")
+        score, choice = client.assess(
+            "state", "is this a true positive", {"sanitization": "is it escaped"},
+        )
+
+        assert (score, choice) == (0.55, "sanitization")
+        questions = mock_agent.predict.call_args[0][1]
+        assert questions["next_question"]["type"] == "choice"
+        assert questions["next_question"]["criteria"] == {"sanitization": "is it escaped"}
+
+
+def test_assess_with_no_options_only_scores():
+    with patch("laya_client.laya.load") as mock_load:
+        mock_agent = MagicMock()
+        mock_agent.predict.return_value = {"answers": {"true_positive": {"noul": 0.3}}}
+        mock_load.return_value = mock_agent
+
+        score, choice = LayaClient(model="m").assess("state", "q", {})
+
+        assert (score, choice) == (0.3, None)
+        assert "next_question" not in mock_agent.predict.call_args[0][1]

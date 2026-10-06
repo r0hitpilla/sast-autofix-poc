@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -17,6 +17,9 @@ class TriageResult:
     llm_reasoning: str
     laya_score: float
     route: str  # "fix" | "review" | "reject"
+    # The (question, LLM answer) evidence Laya gathered before concluding,
+    # in the order Laya asked for it.
+    evidence: list[tuple[str, str]] = field(default_factory=list)
 
 
 @dataclass
@@ -25,6 +28,10 @@ class FixResult:
     diff: str
     applied: bool
     branch: str
+    # The file's content just before this finding's FIRST fix attempt. Retries
+    # and reverts restore to this — not to HEAD — because earlier validated
+    # fixes in the same file are still uncommitted in the working tree.
+    baseline: str | None = None
 
 
 @dataclass
@@ -33,3 +40,24 @@ class ValidationResult:
     clean: bool
     test_output: str
     validated: bool
+    attempts: int = 1
+
+
+@dataclass
+class Hunk:
+    """One changed region of a file, in both old (base) and new (head) line numbers."""
+    file: str
+    old_start: int
+    old_count: int
+    new_start: int
+    new_count: int
+    removed: list[str] = field(default_factory=list)
+    added: list[str] = field(default_factory=list)
+
+    @property
+    def new_end(self) -> int:
+        return self.new_start + max(self.new_count, 1) - 1
+
+    @property
+    def old_end(self) -> int:
+        return self.old_start + max(self.old_count, 1) - 1

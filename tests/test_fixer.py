@@ -133,9 +133,9 @@ def test_fix_finding_reuses_existing_branch_instead_of_crashing():
 
 
 def test_fix_finding_discards_previous_attempt_before_applying_a_retry():
-    # The rejected retry-N edits are still uncommitted in the working tree,
-    # but retry N+1's diff is generated against the ORIGINAL snippet — it
-    # only applies if the file is restored to HEAD first.
+    # The rejected retry-N edits are still uncommitted in the working tree.
+    # Without a snapshot, the file falls back to HEAD — and that restore must
+    # happen before the model is prompted, so it diffs against clean code.
     finding = make_finding()
     ollama = MagicMock()
     ollama.generate.return_value = f"```diff\n{SAMPLE_DIFF}```"
@@ -145,10 +145,51 @@ def test_fix_finding_discards_previous_attempt_before_applying_a_retry():
         fix_finding(finding, ollama, repo, retry_feedback="previous attempt failed")
 
     checkout_calls = [c.args for c in repo.git.checkout.call_args_list]
-    assert ("--", finding.file) in checkout_calls
-    # ...and the restore happens before the patch is applied.
-    assert repo.git.checkout.call_args_list[-1].args == ("--", finding.file)
+    assert checkout_calls[0] == ("--", finding.file)
     mock_apply.assert_called_once()
+
+
+def test_fix_finding_retry_restores_snapshot_not_head(tmp_path):
+    # An earlier validated fix in the same file is uncommitted; restoring to
+    # HEAD would wipe it. A retry must rewind only to this finding's snapshot.
+    (tmp_path / "app.py").write_text("rejected attempt\n")
+    finding = make_finding()
+    ollama = MagicMock()
+    ollama.generate.return_value = f"```diff\n{SAMPLE_DIFF}```"
+    repo = MagicMock()
+    repo.working_tree_dir = str(tmp_path)
+    seen = {}
+
+    def apply(repo_, diff):
+        seen["content"] = (tmp_path / "app.py").read_text()
+        return True
+
+    with patch("fixer.apply_diff", side_effect=apply):
+        result = fix_finding(
+            finding, ollama, repo,
+            retry_feedback="previous attempt failed",
+            baseline="earlier validated fix\n",
+        )
+
+    assert seen["content"] == "earlier validated fix\n"
+    assert result.baseline == "earlier validated fix\n"
+    assert ("--", finding.file) not in [c.args for c in repo.git.checkout.call_args_list]
+
+
+def test_fix_finding_snapshots_file_and_sends_numbered_context(tmp_path):
+    (tmp_path / "app.py").write_text("".join(f"line {n}\n" for n in range(1, 61)))
+    finding = make_finding()
+    ollama = MagicMock()
+    ollama.generate.return_value = f"```diff\n{SAMPLE_DIFF}```"
+    repo = MagicMock()
+    repo.working_tree_dir = str(tmp_path)
+
+    with patch("fixer.apply_diff", return_value=True):
+        result = fix_finding(finding, ollama, repo)
+
+    assert result.baseline.startswith("line 1\n")
+    prompt = ollama.generate.call_args[0][0]
+    assert "41 | line 41" in prompt
 
 
 def test_fix_finding_does_not_discard_on_the_first_attempt():
