@@ -242,7 +242,9 @@ def fix_finding(
             file=sys.stderr,
         )
         return FixResult(
-            finding=finding, diff="", applied=False, branch=branch, baseline=baseline
+            finding=finding, diff="", applied=False, branch=branch, baseline=baseline,
+            error=f"The previous attempt produced no answer ({exc}). Reply concisely "
+                  "with only the edit blocks.",
         )
 
     # Edit blocks are the requested format: models reliably copy code but

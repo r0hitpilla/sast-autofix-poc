@@ -1,21 +1,39 @@
 import ollama
 
+# Reproducible but not greedy. Greedy decoding (temperature 0) let the model's
+# hidden "thinking" fall into a repetition loop that never ended, stalling a
+# run for 19+ minutes. A low temperature with a fixed seed still gives the same
+# answer for the same prompt on every run; the cap and penalty bound a loop.
+GENERATION_OPTIONS = {
+    "temperature": 0.2,
+    "seed": 42,
+    "num_predict": 8192,      # thinking + answer tokens per reply
+    "repeat_penalty": 1.1,
+}
+REQUEST_TIMEOUT_SECONDS = 600
 
-# Greedy decoding with a fixed seed: the same code should get the same
-# triage answers on every run. With sampling, one SQL injection scored 0.85
-# ("fix") on one run and 0.37 ("reject") on the next.
-DETERMINISTIC = {"temperature": 0, "seed": 42}
+
+class LLMOutputLimitError(RuntimeError):
+    """The reply was cut off at num_predict — almost always a runaway loop."""
 
 
 class OllamaClient:
     def __init__(self, host: str, model: str):
-        self.client = ollama.Client(host=host)
+        self.client = ollama.Client(host=host, timeout=REQUEST_TIMEOUT_SECONDS)
         self.model = model
 
     def generate(self, prompt: str) -> str:
         response = self.client.chat(
             model=self.model,
             messages=[{"role": "user", "content": prompt}],
-            options=DETERMINISTIC,
+            options=GENERATION_OPTIONS,
         )
+        if response.get("done_reason") == "length":
+            # A truncated reply is unusable (no VERDICT line, half an edit
+            # block). Raising routes it through the callers' existing failure
+            # handling: triage -> review, fix -> failed attempt, retried.
+            raise LLMOutputLimitError(
+                f"LLM reply hit the {GENERATION_OPTIONS['num_predict']}-token output "
+                "limit (likely a repetition loop)"
+            )
         return response["message"]["content"]
