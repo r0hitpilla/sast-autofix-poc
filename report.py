@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from models import Finding, TriageResult, ValidationResult
-from identity import finding_fingerprint
+from identity import distinct_locations, finding_fingerprint
 from risk import risk_score
 
 
@@ -64,18 +64,27 @@ def _short_question(question: str) -> str:
     return question[:30]
 
 
+def _distinct(records) -> int:
+    return distinct_locations((r.triage.finding.file, r.triage.finding.snippet) for r in records)
+
+
 def to_markdown(report: RunReport) -> str:
     total = len(report.records)
     review = report.count(lambda r: r.triage.route == "review")
     rejected = report.count(lambda r: r.triage.route == "reject")
+    confirmed_records = [r for r in report.records if r.triage.route == "fix"]
     fix_rate = f"{report.fixed / report.confirmed:.0%}" if report.confirmed else "n/a"
+    # Rule hits are what the scanners reported; distinct findings are the
+    # places in the code, which is what gets fixed and what a reader counts.
+    scanned_cell = f"{total} rule hit(s), {_distinct(report.records)} distinct"
+    confirmed_cell = f"{report.confirmed} rule hit(s), {_distinct(confirmed_records)} distinct"
 
     lines = [
         f"# SAST Autofix run: `{report.target}`",
         "",
         "| Findings scanned | Confirmed true positives | Fixed & validated | Fix rate | Needs human review | Rejected as false positive | Still flagged after the fixes |",
         "|---|---|---|---|---|---|---|",
-        f"| {total} | {report.confirmed} | {report.fixed} | {fix_rate} | {review} | {rejected} | {len(report.residual)} |",
+        f"| {scanned_cell} | {confirmed_cell} | {report.fixed} | {fix_rate} | {review} | {rejected} | {len(report.residual)} |",
         "",
     ]
     if report.pr_urls:
@@ -172,7 +181,9 @@ def to_json(report: RunReport) -> str:
         **report.meta,
         "summary": {
             "scanned": len(report.records),
+            "scanned_distinct": _distinct(report.records),
             "confirmed": report.confirmed,
+            "confirmed_distinct": _distinct(r for r in report.records if r.triage.route == "fix"),
             "fixed": report.fixed,
             "review": report.count(lambda r: r.triage.route == "review"),
             "rejected": report.count(lambda r: r.triage.route == "reject"),

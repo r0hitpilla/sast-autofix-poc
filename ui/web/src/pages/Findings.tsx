@@ -54,7 +54,8 @@ export function Findings() {
                 empty={<Empty>{view === "open" ? "No open findings. Every scanned branch is clean." : "No findings match these filters."}</Empty>}
                 columns={[
                   { header: "Severity", width: ".8fr", cell: (f) => <SeverityPill severity={f.severity} /> },
-                  { header: "Finding", width: "1.3fr", cell: (f) => <B>{f.title}</B> },
+                  { header: "Finding", width: "1.3fr", cell: (f) => <span><B>{f.title}</B>
+                      {f.also_flagged_by?.length ? <span className="mute" style={{ fontSize: 12 }}> · +{f.also_flagged_by.length} rule{f.also_flagged_by.length > 1 ? "s" : ""}</span> : null}</span> },
                   { header: "Repository", width: "1.1fr", cell: (f) => <span>{f.repository}</span> },
                   { header: "Branch", width: ".7fr", cell: (f) => <M>{f.branch}</M> },
                   { header: "File", width: "1.4fr", cell: (f) => <M>{f.file}</M> },

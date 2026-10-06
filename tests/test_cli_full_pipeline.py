@@ -225,7 +225,7 @@ def test_run_pipeline_writes_report_and_job_summary(tmp_path, monkeypatch):
                      report_dir=str(tmp_path / "out"))
 
     md = (tmp_path / "out" / "sast-autofix-report.md").read_text()
-    assert "| 1 | 1 | 1 | 100% | 0 | 0 | 0 |" in md
+    assert "| 1 rule hit(s), 1 distinct | 1 rule hit(s), 1 distinct | 1 | 100% | 0 | 0 | 0 |" in md
     assert "`app.py:41`" in md
     assert summary.read_text() == md
     assert (tmp_path / "out" / "sast-autofix-report.json").exists()

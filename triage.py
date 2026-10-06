@@ -52,7 +52,11 @@ INVESTIGATION_QUESTIONS = {
 }
 
 
-def build_reasoning_prompt(finding: Finding, context: str = "") -> str:
+def build_reasoning_prompt(finding: Finding, context: str = "", history: str = "") -> str:
+    earlier = (
+        f"Earlier runs on this code (facts, not a conclusion; judge it fresh):\n{history}\n\n"
+        if history else ""
+    )
     return (
         "You are a security engineer triaging a static analysis finding.\n\n"
         f"File: {finding.file}\n"
@@ -61,6 +65,7 @@ def build_reasoning_prompt(finding: Finding, context: str = "") -> str:
         f"CWE: {finding.cwe}\n"
         f"Semgrep message: {finding.message}\n\n"
         f"Code context:\n{context or finding.snippet}\n\n"
+        f"{earlier}"
         "In plain text, reason about whether this is a real, exploitable "
         "vulnerability or a false positive. Note anything Semgrep's static "
         "view might miss, such as input being sanitized earlier in the call "
@@ -168,6 +173,7 @@ def triage_finding(
     threshold_review: float,
     max_rounds: int = 3,
     context: str = "",
+    history: str = "",
 ) -> TriageResult:
     """Laya-driven triage: Laya decides, the LLM investigates.
 
@@ -179,7 +185,7 @@ def triage_finding(
     is the verdict.
     """
     try:
-        initial = ollama.generate(build_reasoning_prompt(finding, context))
+        initial = ollama.generate(build_reasoning_prompt(finding, context, history))
     except Exception as exc:
         print(
             f"[triage error: ollama call failed for {finding.file}:{finding.line}: {exc}]",

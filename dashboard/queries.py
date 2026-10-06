@@ -16,6 +16,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
+from identity import distinct_locations, normalise_code
 from .db import FindingRow, Run, TrackedFinding
 
 SEVERITIES = ["Critical", "High", "Medium", "Low"]
@@ -142,13 +143,33 @@ def one_per_identity(rows: list[FindingRow]) -> list[FindingRow]:
     return list(newest.values())
 
 
+def group_by_location(rows: list[FindingRow]) -> list[tuple[FindingRow, list[str]]]:
+    """One entry per place in the code, however many rules flag it.
+
+    Semgrep often reports one flaw under several rules (three XSS rules on one
+    f-string; two MD5 rules on one line), and a dependency's advisories share
+    one manifest line. Each entry is the newest rule hit plus the other rules
+    that flag the same code, so the list shows one finding, not one per rule.
+    """
+    grouped: dict[tuple, tuple[FindingRow, list[str]]] = {}
+    for row in one_per_identity(rows):
+        key = (row.run.repository, row.file, normalise_code(row.snippet))
+        if key not in grouped:
+            grouped[key] = (row, [])
+        else:
+            rep, others = grouped[key]
+            if row.rule_id != rep.rule_id and row.rule_id not in others:
+                others.append(row.rule_id)
+    return list(grouped.values())
+
+
 def open_findings(session: Session, repository=None, as_of=None) -> list[FindingRow]:
     ids = [r.id for r in latest_runs(session, repository, as_of)]
     if not ids:
         return []
     stmt = (select(FindingRow).where(FindingRow.run_id.in_(ids), FindingRow.route.in_(OPEN_ROUTES))
             .options(selectinload(FindingRow.run)))
-    return one_per_identity(list(session.scalars(stmt).all()))
+    return [row for row, _ in group_by_location(list(session.scalars(stmt).all()))]
 
 
 def tracked_for(session: Session, rows: list[FindingRow]) -> dict[str, TrackedFinding]:
@@ -254,15 +275,47 @@ def list_findings(session: Session, state="open", repository=None, severity=None
     # Riskiest first. Rows without a risk score (recorded before it existed)
     # fall back to severity order, after the scored ones.
     order = {s: i for i, s in enumerate(SEVERITIES)}
-    rows = one_per_identity(rows)
-    rows.sort(key=lambda r: (
-        r.risk is None, -(r.risk or 0.0), order.get(r.severity, 9),
-        -(aware(r.run.started_at) or now()).timestamp(),
+    grouped = group_by_location(rows)
+    grouped.sort(key=lambda g: (
+        g[0].risk is None, -(g[0].risk or 0.0), order.get(g[0].severity, 9),
+        -(aware(g[0].run.started_at) or now()).timestamp(),
     ))
-    tracked = tracked_for(session, rows)
-    return {"total": len(rows), "items": [
-        finding_summary(r, tracked=tracked.get(r.fingerprint)) for r in rows[offset:offset + limit]
-    ]}
+    tracked = tracked_for(session, [row for row, _ in grouped])
+    items = []
+    for row, others in grouped[offset:offset + limit]:
+        item = finding_summary(row, tracked=tracked.get(row.fingerprint))
+        item["also_flagged_by"] = others
+        items.append(item)
+    return {"total": len(grouped), "items": items}
+
+
+def history_for(session: Session, repository: str) -> list[dict]:
+    """What earlier runs found and tried for this repository's findings.
+
+    The pipeline reads this before triage and fixing, so the LLM knows what
+    was already concluded and what already failed instead of starting cold.
+    """
+    tracked = session.scalars(select(TrackedFinding).where(TrackedFinding.repository == repository)).all()
+    if not tracked:
+        return []
+    run_ids = {t.latest_run_id for t in tracked}
+    rows = session.scalars(select(FindingRow).where(FindingRow.run_id.in_(run_ids))).all()
+    latest = {(r.fingerprint, r.run_id): r for r in rows}
+    out = []
+    for t in tracked:
+        row = latest.get((t.fingerprint, t.latest_run_id))
+        fix = (row.fix or {}) if row else {}
+        out.append({
+            "fingerprint": t.fingerprint, "rule_id": t.rule_id, "cwe": t.cwe, "file": t.file,
+            "occurrences": t.occurrences, "first_seen": iso(t.first_seen), "last_seen": iso(t.last_seen),
+            "llm_label": t.llm_label, "laya_score": t.laya_score, "rounds": t.rounds,
+            "fix_attempts": t.fix_attempts, "fix_validated": t.fix_validated,
+            "disposition": t.disposition, "pr_url": t.pr_url,
+            "fix_failure": fix.get("failure"),
+            "fix_check_output": (fix.get("check_output") or "")[-600:] or None,
+            "last_proposal": (fix.get("last_proposal") or "")[:800] or None,
+        })
+    return out
 
 
 def _parse_context(context: str | None, start: int, end: int) -> list[dict]:
@@ -342,7 +395,10 @@ def pr_detail(session: Session, repository: str, number: int) -> dict | None:
         "number": number, "url": run.pr_url, "repository": repository,
         "head": run.fix_branch, "base": run.base_branch, "run": run_summary(run),
         "summary": {"scanned": run.scanned, "confirmed": run.confirmed, "fixed": run.fixed,
-                    "review": run.review, "rejected": run.rejected},
+                    "review": run.review, "rejected": run.rejected,
+                    "scanned_distinct": distinct_locations((f.file, f.snippet) for f in run.findings),
+                    "confirmed_distinct": distinct_locations(
+                        (f.file, f.snippet) for f in run.findings if f.route == "fix")},
         "validation": {"state": run.fix_branch_state, "description": run.fix_branch_description},
         "gate": {"passed": base_gate.gate_passed if base_gate else None,
                  "blocking": base_gate.blocking if base_gate else None,

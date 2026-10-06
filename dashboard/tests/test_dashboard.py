@@ -263,3 +263,31 @@ def test_dry_runs_do_not_create_tracked_findings(Session):
     ingest(report("r1", dry_run=True, findings=[finding(fp, 5, "CWE-79: x", "High", "fix", "x")]), Session)
     with Session() as s:
         assert s.get(TrackedFinding, fp) is None
+
+
+def test_same_code_under_several_rules_is_one_location(Session):
+    # One flaw, three rules, one line: one finding with the other rules listed.
+    code = "return f'<h1>{name}</h1>'"
+    def hit(fp, rule):
+        f = finding(fp, 7, "CWE-79: x", "High", "fix", "fixed and validated", True, 1)
+        f["finding"]["rule_id"] = rule
+        f["finding"]["snippet"] = code
+        return f
+    ingest(report("r1", findings=[hit("loc-a", "rule.one"), hit("loc-b", "rule.two"), hit("loc-c", "rule.three")]), Session)
+    with Session() as s:
+        listing = queries.list_findings(s, state="all")
+    assert listing["total"] == 1
+    item = listing["items"][0]
+    # Two of the three rules are listed as "also"; the third is the representative.
+    assert len(item["also_flagged_by"]) == 2
+    assert {item["rule_id"], *item["also_flagged_by"]} == {"rule.one", "rule.two", "rule.three"}
+
+
+def test_history_endpoint_reports_earlier_findings_for_a_repository(Session):
+    ingest(report("r1", findings=[finding("hist-1", 5, "CWE-79: x", "High", "fix", "fix failed", False, 3)]), Session)
+    with Session() as s:
+        items = queries.history_for(s, "o/r")
+    assert items[0]["fingerprint"] == "hist-1"
+    assert items[0]["fix_attempts"] == 3 and items[0]["fix_validated"] is False
+    with Session() as s:
+        assert queries.history_for(s, "other/repo") == []

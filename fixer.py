@@ -50,6 +50,7 @@ def build_fix_prompt(
     finding: Finding, retry_feedback: str | None = None, context: str = "", header: str = "",
     dependencies: str = "",
     playbook: str = "",
+    history: str = "",
 ) -> str:
     prompt = (
         "You are a security engineer writing a minimal, correct fix for a "
@@ -84,6 +85,11 @@ def build_fix_prompt(
         prompt += (
             "\nHow to fix this kind of finding correctly (follow it; a smaller "
             f"edit that only silences the scanner is not acceptable):\n{playbook}\n"
+        )
+    if history:
+        prompt += (
+            "\nEarlier runs on this exact code (facts). Do not repeat an approach "
+            f"that already failed:\n{history}\n"
         )
     prompt += "\n" + EDIT_FORMAT + "\n"
     if retry_feedback:
@@ -283,6 +289,7 @@ def fix_finding(
     baseline: str | None = None,
     model: str | None = None,
     cleanup: list[str] | None = None,
+    history: str = "",
 ) -> FixResult:
     """`model` overrides the LLM for this attempt (retries can rotate
     models); `cleanup` lists files the previous attempt created."""
@@ -307,7 +314,7 @@ def fix_finding(
         model_output = ollama.generate(
             build_fix_prompt(
                 finding, retry_feedback, context, header, dependencies,
-                playbook=guidance_for(finding),
+                playbook=guidance_for(finding), history=history,
             ),
             think=False, **extra
         )

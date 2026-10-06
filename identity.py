@@ -17,6 +17,14 @@ def normalise_code(snippet: str) -> str:
     return " ".join((snippet or "").split())
 
 
+def distinct_locations(pairs) -> int:
+    """How many distinct places in the code the (file, snippet) pairs cover.
+
+    Several rules often flag the same code, so rule hits and findings differ.
+    """
+    return len({(file, normalise_code(snippet)) for file, snippet in pairs})
+
+
 def finding_fingerprint(repository: str, rule_id: str, file: str, snippet: str) -> str:
     # \x1f (unit separator) cannot appear in these fields, so the parts can't
     # run together and collide ("a|b" + "c" vs "a" + "b|c").

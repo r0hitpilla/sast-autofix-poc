@@ -19,6 +19,7 @@ export interface FindingSummary {
   verdict: string; route: Route; confidence: number; fix_status: string; outcome: string;
   cvss: number | null; risk: number | null; advisory_url: string | null;
   occurrences?: number; first_seen?: string | null; last_seen?: string | null;
+  also_flagged_by?: string[];
   detected_at: string | null;
 }
 
@@ -87,7 +88,8 @@ export interface PrLive {
 export interface PrDetail {
   number: number; url: string | null; repository: string; head: string | null; base: string;
   run: RunSummary;
-  summary: { scanned: number; confirmed: number; fixed: number; review: number; rejected: number };
+  summary: { scanned: number; confirmed: number; fixed: number; review: number; rejected: number;
+             scanned_distinct: number; confirmed_distinct: number };
   validation: { state: string | null; description: string | null };
   gate: { passed: boolean | null; blocking: number | null; run_id: string | null };
   findings: FindingSummary[]; live: PrLive;

@@ -26,6 +26,7 @@ from pr import (
 from provenance import provenance
 from report import FindingRecord, RunReport, write_report
 from risk import by_risk
+from history import fetch_history, finding_history, history_note
 from scanner import scan
 from triage import triage_finding
 from validator import count_same_rule_and_file, validate_and_retry
@@ -57,9 +58,11 @@ def cmd_triage(args):
     ], indent=2))
 
 
-def triage_all(findings, target_repo, cfg, ollama, laya):
+def triage_all(findings, target_repo, cfg, ollama, laya, repository="", history=None):
     """Triage every finding against the UNMODIFIED repo, before any fix lands —
-    later fixes shift line numbers, which would skew the code context."""
+    later fixes shift line numbers, which would skew the code context.
+
+    `history` (see history.py) tells the LLM what earlier runs concluded."""
     results = []
     by_location = {}
     for n, f in enumerate(findings, start=1):
@@ -78,6 +81,7 @@ def triage_all(findings, target_repo, cfg, ollama, laya):
             f, ollama, laya, cfg.threshold_fix, cfg.threshold_review,
             max_rounds=cfg.triage_max_rounds,
             context=context,
+            history=history_note(finding_history(history or {}, repository, f)),
         )
         result = dataclasses.replace(result, context=context)
         asked = len(result.evidence) - 1 if result.evidence else 0
@@ -192,6 +196,8 @@ def run_pipeline(
     with timed(timings, "scan"):
         findings = scan(target_repo, cfg.semgrep_rulesets, cfg.engines)
     ollama = OllamaClient(host=cfg.ollama_host, model=cfg.ollama_model)
+    # What earlier runs found and tried for this repository (empty if no dashboard).
+    history = fetch_history(cfg.dashboard_url, repo_full_name)
     laya = LayaClient(model=cfg.laya_model)
 
     # Every finding ends up in exactly one of these buckets — a human reading
@@ -226,7 +232,8 @@ def run_pipeline(
     }
 
     with timed(timings, "triage (Laya + LLM)"):
-        triage_results = triage_all(findings, target_repo, cfg, ollama, laya)
+        triage_results = triage_all(findings, target_repo, cfg, ollama, laya,
+                                    repository=repo_full_name, history=history)
 
     if check_only:
         # Used on fix branches (SV-fix): report and gate, but never generate
@@ -298,8 +305,10 @@ def run_pipeline(
             continue
 
         with timed(timings, "fix + rescan loop"):
+            note = history_note(finding_history(history, repo_full_name, finding))
             fix_result = fix_finding(
                 with_all_rules(finding, findings), ollama, repo, model=cfg.fix_models[0],
+                history=note,
             )
             validation_result = validate_and_retry(
                 fix_result, ollama, repo, target_repo,
@@ -310,6 +319,7 @@ def run_pipeline(
                 review=cfg.fix_review,
                 known_rules={f.rule_id for f in findings if f.file == finding.file},
                 fix_models=cfg.fix_models,
+                history=note,
                 retriage=lambda f: triage_finding(
                     f, ollama, laya, cfg.threshold_fix, cfg.threshold_review,
                     max_rounds=cfg.triage_max_rounds,

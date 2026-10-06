@@ -282,6 +282,7 @@ def validate_and_retry(
     known_rules: set | None = None,
     fix_models: list[str] | None = None,
     engines=("semgrep",),
+    history: str = "",
 ) -> ValidationResult:
     """Validate an already-applied fix; on failure feed the reason back to the
     LLM for a new fix, up to `max_retries` more attempts.
@@ -331,7 +332,7 @@ def validate_and_retry(
         model = fix_models[attempts % len(fix_models)] if fix_models else None
         current_fix = fix_finding(
             finding, ollama, repo, retry_feedback=feedback, baseline=baseline,
-            model=model, cleanup=current_fix.created_files,
+            model=model, cleanup=current_fix.created_files, history=history,
         )
         attempts += 1
         last_proposal = current_fix.diff or last_proposal

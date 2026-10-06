@@ -10,6 +10,8 @@ laya:
 thresholds:
   fix: 0.8
   review: 0.4
+# The dashboard keeps what earlier runs found; the LLM is told about it.
+dashboard_url: http://127.0.0.1:8710
 # Scanners run on every pass. semgrep: SAST. gitleaks: hard-coded secrets.
 # osv: vulnerable dependencies (osv-scanner).
 engines:
