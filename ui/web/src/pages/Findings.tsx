@@ -6,7 +6,7 @@ import { useApi } from "../api/useApi";
 import { Shell } from "../components/Shell";
 import { Async, B, Card, DataTable, Empty, FixStatusPill, M, N, PageHead, SeverityPill } from "../components/ui";
 import { carry, useFilters } from "../lib/filters";
-import { pct } from "../lib/format";
+import { dateTime, pct } from "../lib/format";
 
 const SEVERITIES = ["Critical", "High", "Medium", "Low"];
 const ROUTES = [["fix", "True positive"], ["review", "Uncertain"], ["reject", "False positive"]];
@@ -61,6 +61,9 @@ export function Findings() {
                   { header: "Line", width: ".5fr", cell: (f) => <M>{f.line}</M> },
                   { header: "AI verdict", width: "1fr", cell: (f) => f.verdict },
                   { header: "Confidence", width: ".8fr", cell: (f) => <N>{pct(f.confidence, 0)}</N> },
+                  { header: "Seen", width: "1fr", cell: (f) => f.occurrences == null ? "—" :
+                      <span title={`first ${dateTime(f.first_seen)} · last ${dateTime(f.last_seen)}`}>
+                        <N>{f.occurrences}×</N> <span className="mute">{dateTime(f.last_seen)}</span></span> },
                   { header: "Risk", width: ".5fr", cell: (f) => <N>{f.risk == null ? "—" : f.risk.toFixed(1)}</N> },
                   { header: "CVSS", width: ".5fr", cell: (f) => <N>{f.cvss == null ? "—" : f.cvss.toFixed(1)}</N> },
                   { header: "Fix status", width: "1fr", cell: (f) => <FixStatusPill status={f.fix_status} /> },

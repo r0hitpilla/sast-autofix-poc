@@ -18,6 +18,7 @@ export interface FindingSummary {
   rule_id: string; repository: string; branch: string; file: string; line: number;
   verdict: string; route: Route; confidence: number; fix_status: string; outcome: string;
   cvss: number | null; risk: number | null; advisory_url: string | null;
+  occurrences?: number; first_seen?: string | null; last_seen?: string | null;
   detected_at: string | null;
 }
 

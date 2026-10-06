@@ -10,9 +10,10 @@ import json
 import sys
 from datetime import datetime, timezone
 
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 
 from .db import FindingRow, Run, make_sessionmaker
+from .tracking import refresh
 
 SUPPORTED_SCHEMA_VERSIONS = {2}
 
@@ -98,9 +99,14 @@ def ingest(report: dict, sessionmaker=None) -> Run:
     run = run_from_report(report)
     Session = sessionmaker or make_sessionmaker()
     with Session.begin() as session:
+        # Identities this run touched before and now: both need refreshing,
+        # since a re-ingest can drop a finding a previous ingest recorded.
+        old = session.scalars(select(FindingRow.fingerprint).where(FindingRow.run_id == run.id)).all()
         session.execute(delete(FindingRow).where(FindingRow.run_id == run.id))
         session.execute(delete(Run).where(Run.id == run.id))
         session.add(run)
+        session.flush()
+        refresh(session, list(old) + [row.fingerprint for row in run.findings])
     return run
 
 

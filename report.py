@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from models import Finding, TriageResult, ValidationResult
+from identity import finding_fingerprint
 from risk import risk_score
 
 
@@ -123,20 +124,18 @@ def to_markdown(report: RunReport) -> str:
 SCHEMA_VERSION = 2
 
 
-def fingerprint(finding: Finding) -> str:
-    """Stable identity of a finding across runs: rule + file + the flagged
-    code with whitespace collapsed — NOT the line number, which moves as
-    other code changes above it."""
-    code = " ".join(finding.snippet.split())
-    return hashlib.sha256(f"{finding.rule_id}|{finding.file}|{code}".encode()).hexdigest()[:16]
+def fingerprint(finding: Finding, repository: str = "") -> str:
+    """Stable identity of a finding across runs, branches and repositories.
+    See identity.py for what it covers and what it deliberately leaves out."""
+    return finding_fingerprint(repository, finding.rule_id, finding.file, finding.snippet)
 
 
-def _record_json(r: FindingRecord) -> dict:
+def _record_json(r: FindingRecord, repository: str = "") -> dict:
     from triage import llm_label, question_label
 
     v = r.validation
     return {
-        "fingerprint": fingerprint(r.triage.finding),
+        "fingerprint": fingerprint(r.triage.finding, repository),
         "finding": dataclasses.asdict(r.triage.finding),
         "risk": risk_score(r.triage.finding),
         "triage": {
@@ -166,6 +165,7 @@ def _record_json(r: FindingRecord) -> dict:
 
 
 def to_json(report: RunReport) -> str:
+    repository = (report.meta.get("run") or {}).get("repository", "")
     return json.dumps({
         "schema_version": SCHEMA_VERSION,
         "target": report.target,
@@ -179,7 +179,7 @@ def to_json(report: RunReport) -> str:
             "blocking": len(report.blocking),
             "residual": len(report.residual),
         },
-        "findings": [_record_json(r) for r in report.records],
+        "findings": [_record_json(r, repository) for r in report.records],
         "residual": [dataclasses.asdict(f) for f in report.residual],
         "timings": report.timings,
         "pr_urls": report.pr_urls,

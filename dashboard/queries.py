@@ -16,7 +16,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
-from .db import FindingRow, Run
+from .db import FindingRow, Run, TrackedFinding
 
 SEVERITIES = ["Critical", "High", "Medium", "Low"]
 OPEN_ROUTES = ("fix", "review")
@@ -133,13 +133,30 @@ def latest_runs(session: Session, repository=None, as_of: datetime | None = None
     return list(latest.values())
 
 
+def one_per_identity(rows: list[FindingRow]) -> list[FindingRow]:
+    """Keep the newest occurrence of each finding identity. The same
+    vulnerability on several branches, or in several runs, is one finding."""
+    newest: dict[str, FindingRow] = {}
+    for row in sorted(rows, key=lambda r: aware(r.run.started_at) or now(), reverse=True):
+        newest.setdefault(row.fingerprint, row)
+    return list(newest.values())
+
+
 def open_findings(session: Session, repository=None, as_of=None) -> list[FindingRow]:
     ids = [r.id for r in latest_runs(session, repository, as_of)]
     if not ids:
         return []
     stmt = (select(FindingRow).where(FindingRow.run_id.in_(ids), FindingRow.route.in_(OPEN_ROUTES))
             .options(selectinload(FindingRow.run)))
-    return list(session.scalars(stmt).all())
+    return one_per_identity(list(session.scalars(stmt).all()))
+
+
+def tracked_for(session: Session, rows: list[FindingRow]) -> dict[str, TrackedFinding]:
+    fingerprints = {r.fingerprint for r in rows}
+    if not fingerprints:
+        return {}
+    found = session.scalars(select(TrackedFinding).where(TrackedFinding.fingerprint.in_(fingerprints))).all()
+    return {t.fingerprint: t for t in found}
 
 
 STAGES = [  # (timing key written by the pipeline, display name)
@@ -202,9 +219,15 @@ def advisory_url(rule_id: str) -> str | None:
     return ADVISORY_BASE + advisory if re.fullmatch(r"[A-Za-z0-9._-]+", advisory) else None
 
 
-def finding_summary(row: FindingRow, run: Run | None = None) -> dict:
+def finding_summary(row: FindingRow, run: Run | None = None, tracked: TrackedFinding | None = None) -> dict:
     run = run or row.run
+    history = {} if tracked is None else {
+        "occurrences": tracked.occurrences,
+        "first_seen": iso(tracked.first_seen),
+        "last_seen": iso(tracked.last_seen),
+    }
     return {
+        **history,
         "id": row.id, "run_id": row.run_id, "fingerprint": row.fingerprint,
         "severity": row.severity, "title": cwe_title(row.cwe), "cwe": cwe_id(row.cwe),
         "rule_id": row.rule_id, "repository": run.repository, "branch": run.base_branch,
@@ -231,11 +254,15 @@ def list_findings(session: Session, state="open", repository=None, severity=None
     # Riskiest first. Rows without a risk score (recorded before it existed)
     # fall back to severity order, after the scored ones.
     order = {s: i for i, s in enumerate(SEVERITIES)}
+    rows = one_per_identity(rows)
     rows.sort(key=lambda r: (
         r.risk is None, -(r.risk or 0.0), order.get(r.severity, 9),
         -(aware(r.run.started_at) or now()).timestamp(),
     ))
-    return {"total": len(rows), "items": [finding_summary(r) for r in rows[offset:offset + limit]]}
+    tracked = tracked_for(session, rows)
+    return {"total": len(rows), "items": [
+        finding_summary(r, tracked=tracked.get(r.fingerprint)) for r in rows[offset:offset + limit]
+    ]}
 
 
 def _parse_context(context: str | None, start: int, end: int) -> list[dict]:

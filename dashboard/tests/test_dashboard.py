@@ -5,7 +5,7 @@ import pytest
 from sqlalchemy import func, select
 
 from dashboard import queries
-from dashboard.db import FindingRow, Run
+from dashboard.db import FindingRow, Run, TrackedFinding
 from dashboard.ingest import ReportError, ingest, main as ingest_main
 
 from .conftest import finding, report
@@ -230,3 +230,36 @@ def test_advisory_url_only_for_osv_ids():
     assert queries.advisory_url("osv.GHSA-68rp-wp8r-4726") == "https://osv.dev/vulnerability/GHSA-68rp-wp8r-4726"
     assert queries.advisory_url("python.flask.security.open-redirect") is None
     assert queries.advisory_url("osv.bad/../x") is None
+
+
+# ---- finding identity across runs ------------------------------------------
+
+def test_same_finding_across_branches_and_runs_is_one_finding(Session):
+    fp = "ident-1"
+    ingest(report("r1", branch="SV", hours_ago=3, findings=[
+        finding(fp, 5, "CWE-79: x", "High", "fix", "fixed and validated", True, 1)]), Session)
+    ingest(report("r2", branch="SV2", hours_ago=1, findings=[
+        finding(fp, 9, "CWE-79: x", "High", "fix", "fixed and validated", True, 2)]), Session)
+    with Session() as s:
+        tracked = s.get(TrackedFinding, fp)
+        assert tracked.occurrences == 2
+        assert tracked.first_seen < tracked.last_seen
+        listing = queries.list_findings(s, state="all")
+    assert listing["total"] == 1
+    assert listing["items"][0]["occurrences"] == 2
+
+
+def test_reingesting_a_run_does_not_double_count(Session):
+    fp = "ident-2"
+    r = report("r1", findings=[finding(fp, 5, "CWE-79: x", "High", "fix", "fixed and validated", True, 1)])
+    ingest(r, Session)
+    ingest(r, Session)
+    with Session() as s:
+        assert s.get(TrackedFinding, fp).occurrences == 1
+
+
+def test_dry_runs_do_not_create_tracked_findings(Session):
+    fp = "ident-3"
+    ingest(report("r1", dry_run=True, findings=[finding(fp, 5, "CWE-79: x", "High", "fix", "x")]), Session)
+    with Session() as s:
+        assert s.get(TrackedFinding, fp) is None
