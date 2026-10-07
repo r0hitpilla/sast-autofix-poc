@@ -9,11 +9,13 @@ an error, not a silent skip: a pipeline that quietly stops scanning for
 secrets is worse than one that stops.
 """
 
+import hashlib
 import json
 import os
 import re
 import shutil
 import subprocess
+import time
 
 from models import Finding
 
@@ -178,14 +180,54 @@ def parse_osv_json(raw: str, target_repo: str | None = None) -> list[Finding]:
     return findings
 
 
+# Files whose content decides what osv-scanner finds. While none of them changes,
+# the answer can't change either (within a run), so it is not asked for again.
+MANIFEST_NAMES = {
+    "pyproject.toml", "Pipfile.lock", "poetry.lock", "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
+    "go.mod", "go.sum", "pom.xml", "Gemfile.lock", "Cargo.lock", "composer.lock",
+}
+SKIP_DIRS = {".git", ".venv", "venv", "node_modules", "__pycache__", ".pytest_cache"}
+OSV_RETRIES = (2, 5)   # seconds to wait before each retry of a failed run
+_osv_cache: dict[str, tuple[str, list]] = {}
+
+
+def manifest_fingerprint(target_repo: str) -> str:
+    digest = hashlib.sha256()
+    for dirpath, dirnames, filenames in os.walk(target_repo):
+        dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS)
+        for name in sorted(filenames):
+            if name in MANIFEST_NAMES or (name.startswith("requirements") and name.endswith((".txt", ".in"))):
+                path = os.path.join(dirpath, name)
+                digest.update(os.path.relpath(path, target_repo).encode())
+                with open(path, "rb") as f:
+                    digest.update(f.read())
+    return digest.hexdigest()
+
+
 def run_osv(target_repo: str) -> list[Finding]:
+    """Dependency findings. osv-scanner asks api.osv.dev, so a network blip is
+    retried, and the result is reused while the dependency files are unchanged:
+    a fix to Python code can't change which dependencies are vulnerable."""
     binary = _require("osv-scanner")
-    result = subprocess.run(
-        [binary, "scan", "source", "-r", ".", "--format", "json"],
-        capture_output=True, text=True, cwd=target_repo,
-    )
-    # osv-scanner exits 1 when vulnerabilities are found, 128 when it found
-    # no supported manifests. Only other codes are real failures.
-    if result.returncode not in (0, 1, 128):
-        raise RuntimeError(f"osv-scanner failed (exit {result.returncode}): {result.stderr}")
-    return parse_osv_json(result.stdout, target_repo)
+    key = os.path.abspath(target_repo)
+    fingerprint = manifest_fingerprint(target_repo)
+    cached = _osv_cache.get(key)
+    if cached and cached[0] == fingerprint:
+        return list(cached[1])
+    attempt = 0
+    while True:
+        result = subprocess.run(
+            [binary, "scan", "source", "-r", ".", "--format", "json"],
+            capture_output=True, text=True, cwd=target_repo,
+        )
+        # osv-scanner exits 1 when vulnerabilities are found, 128 when it found
+        # no supported manifests. Only other codes are real failures.
+        if result.returncode in (0, 1, 128):
+            findings = parse_osv_json(result.stdout, target_repo)
+            _osv_cache[key] = (fingerprint, findings)
+            return list(findings)
+        if attempt >= len(OSV_RETRIES):
+            raise RuntimeError(f"osv-scanner failed (exit {result.returncode}) after {attempt + 1} attempts: "
+                               f"{result.stderr[-600:]}")
+        time.sleep(OSV_RETRIES[attempt])
+        attempt += 1

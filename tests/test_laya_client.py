@@ -62,3 +62,32 @@ def test_assess_with_no_options_only_scores():
 
         assert (score, choice) == (0.3, None)
         assert "next_question" not in mock_agent.predict.call_args[0][1]
+
+
+def test_laya_calls_are_recorded_with_their_purpose_but_no_token_counts():
+    from unittest.mock import MagicMock, patch
+    from laya_client import LayaClient
+    from llm_usage import tag
+
+    with patch("laya_client.laya.load", return_value=MagicMock()) as load:
+        load.return_value.predict.return_value = {"answers": {"true_positive": {"noul": 0.83}}}
+        client = LayaClient("laya-model")
+        with tag(purpose="laya_triage", ref="app.py:98"):
+            score, choice = client.assess("state", "q", {})
+    assert (score, choice) == (0.83, None)
+    [call] = client.usage.calls()
+    assert (call.purpose, call.provider, call.ref) == ("laya_triage", "laya", "app.py:98")
+    assert call.prompt_tokens is None and call.ok
+
+
+def test_a_failing_laya_call_is_recorded_and_re_raised():
+    from unittest.mock import MagicMock, patch
+    import pytest
+    from laya_client import LayaClient
+
+    with patch("laya_client.laya.load", return_value=MagicMock()) as load:
+        load.return_value.predict.side_effect = RuntimeError("gpu error")
+        client = LayaClient("laya-model")
+        with pytest.raises(RuntimeError):
+            client.assess("state", "q", {})
+    assert not client.usage.calls()[0].ok

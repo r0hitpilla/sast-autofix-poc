@@ -10,6 +10,7 @@ from git_utils import checkout_branch
 from models import Finding, FixResult
 from fix_guard import forbidden_new_file
 from injection import FENCE_RULE, fence
+from llm_usage import tag
 from playbooks import guidance_for
 
 DIFF_BLOCK_RE = re.compile(r"```(?:diff)?\n(.*?)```", re.DOTALL)
@@ -328,13 +329,14 @@ def fix_finding(
 
     try:
         extra = {"model": model} if model else {}
-        model_output = ollama.generate(
-            build_fix_prompt(
-                finding, retry_feedback, context, header, dependencies,
-                playbook=guidance_for(finding), history=history,
-            ),
-            think=False, **extra
-        )
+        with tag(purpose="fix", ref=f"{finding.file}:{finding.line}"):
+            model_output = ollama.generate(
+                build_fix_prompt(
+                    finding, retry_feedback, context, header, dependencies,
+                    playbook=guidance_for(finding), history=history,
+                ),
+                think=False, **extra
+            )
     except Exception as exc:
         # Spec: an Ollama call failure must never take the pipeline down —
         # log it and report the finding as unfixed so run_pipeline can skip

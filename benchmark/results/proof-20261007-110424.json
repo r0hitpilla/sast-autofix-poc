@@ -1,0 +1,80 @@
+{
+  "summary": {
+    "classes": 6,
+    "ready": 6,
+    "valid": 6,
+    "false_refutations": 0
+  },
+  "rows": [
+    {
+      "class": "sql_injection",
+      "finding": "orders.py:50",
+      "prepare": "ready",
+      "seconds": 8,
+      "attempts": 1,
+      "model": "qwen3-coder-aida:latest",
+      "on_reference_fix": "passed",
+      "valid": true,
+      "test": "import pytest\nimport os\nimport shutil\nimport sys\n\n# Make `import app` work when pytest runs from the repo root.\nsys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))\n\nimport app as app_module\nimport orders as orders_module\n\n\n@pytest.fixture\ndef client():\n    # Set up the database and files exactly like the example tests do\n    os.makedirs(orders_module.INVOICE_DIR, exist_ok=True)\n    path = os.path.join(orders_module.INVOICE_DIR, \"INV-1001.txt\")\n    with open(path, \"w\") as f:\n        f.write(\"Invoice 1001: 3 x notebook\")\n    \n    orders_module.init_orders_db()\n    app_module.app.config[\"TESTING\"] = True\n    with app_module.app.test_client() as c:\n        yield c\n    os.remove(path)\n    shutil.rmtree(orders_module.EXPORT_DIR, ignore_errors=True)\n\n\ndef test_proof_sql_injection(client):\n    # Control: an ordinary request works and finds a record that really exists\n    ok = client.get(\"/orders/search\", query_string={\"customer\": \"ann\"})\n    assert ok.status_code == 200\n    results = ok.get_json()[\"results\"]\n    assert len(results) > 0\n\n    # Attack: SQL injection payload that should return no results\n    try:\n        rows = client.get(\"/orders/search\", query_string={\"customer\": \"nobody' OR '1'='1\"}).get_json()[\"results\"]\n    except Exception:\n        rows = []\n    \n    # The safe outcome is that the request returns no results (empty list)\n    assert rows == []\n"
+    },
+    {
+      "class": "command_injection",
+      "finding": "orders.py:64",
+      "prepare": "ready",
+      "seconds": 11,
+      "attempts": 1,
+      "model": "qwen3-coder-aida:latest",
+      "on_reference_fix": "passed",
+      "valid": true,
+      "test": "import pytest\nimport os\nimport shutil\nimport sys\n\n# Import app module to set up the Flask app and fixtures\nsys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))\nimport app as app_module\nimport orders as orders_module\n\n\n@pytest.fixture\ndef client(tmp_path):\n    # Set up invoice directory and test file\n    os.makedirs(orders_module.INVOICE_DIR, exist_ok=True)\n    path = os.path.join(orders_module.INVOICE_DIR, \"INV-1001.txt\")\n    with open(path, \"w\") as f:\n        f.write(\"Invoice 1001: 3 x notebook\")\n    \n    # Initialize database\n    orders_module.init_orders_db()\n    \n    app_module.app.config[\"TESTING\"] = True\n    with app_module.app.test_client() as c:\n        yield c\n    \n    # Clean up\n    os.remove(path)\n    shutil.rmtree(orders_module.EXPORT_DIR, ignore_errors=True)\n\n\ndef test_proof_command_injection(client, tmp_path):\n    canary = tmp_path / \"pwned\"\n    \n    # Control: an ordinary request should work\n    assert client.get(\"/orders/export\", query_string={\"name\": \"march\"}).status_code == 200\n    \n    try:\n        # Inject command via the 'name' parameter to create a canary file\n        client.get(\"/orders/export\", query_string={\"name\": f\"x; touch {canary} #\"})\n    except Exception:\n        pass\n    \n    # The canary should not exist, proving the injection was neutralized\n    assert not canary.exists()\n"
+    },
+    {
+      "class": "unsafe_yaml",
+      "finding": "orders.py:70",
+      "prepare": "ready",
+      "seconds": 10,
+      "attempts": 1,
+      "model": "qwen3-coder-aida:latest",
+      "on_reference_fix": "passed",
+      "valid": true,
+      "test": "import pytest\nimport os\nimport shutil\nimport tempfile\n\nimport app as app_module\nimport orders as orders_module\n\n\n@pytest.fixture\ndef client():\n    # Set up the database and required directories\n    os.makedirs(orders_module.INVOICE_DIR, exist_ok=True)\n    os.makedirs(orders_module.EXPORT_DIR, exist_ok=True)\n    \n    # Initialize the database\n    orders_module.init_orders_db()\n    \n    app_module.app.config[\"TESTING\"] = True\n    with app_module.app.test_client() as c:\n        yield c\n    \n    # Clean up\n    shutil.rmtree(orders_module.INVOICE_DIR, ignore_errors=True)\n    shutil.rmtree(orders_module.EXPORT_DIR, ignore_errors=True)\n\n\ndef test_proof_unsafe_yaml(client, tmp_path):\n    canary = tmp_path / \"pwned\"\n    \n    # Control: a normal document is accepted\n    resp = client.post(\"/orders/import\", \n                       data=\"orders: []\", \n                       content_type=\"text/yaml\")\n    assert resp.status_code == 200\n    \n    # Evil payload that should trigger os.system if unsafe loader is used\n    evil = f'!!python/object/apply:os.system [\"touch {canary}\"]'\n    \n    try:\n        client.post(\"/orders/import\", \n                    data=evil, \n                    content_type=\"text/yaml\")\n    except Exception:\n        pass\n    \n    # If the vulnerability exists, the canary file would be created\n    # If fixed properly, it should not exist\n    assert not canary.exists()\n"
+    },
+    {
+      "class": "xss",
+      "finding": "orders.py:78",
+      "prepare": "ready",
+      "seconds": 9,
+      "attempts": 1,
+      "model": "qwen3-coder-aida:latest",
+      "on_reference_fix": "passed",
+      "valid": true,
+      "test": "import pytest\nimport os\nimport shutil\nimport sys\n\n# Import app module to set up the Flask app and routes\nsys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))\nimport app as app_module\nimport orders as orders_module\n\nINVOICE = \"INV-1001.txt\"\n\n@pytest.fixture\ndef client():\n    # Set up required directories and files\n    os.makedirs(orders_module.INVOICE_DIR, exist_ok=True)\n    path = os.path.join(orders_module.INVOICE_DIR, INVOICE)\n    with open(path, \"w\") as f:\n        f.write(\"Invoice 1001: 3 x notebook\")\n    \n    # Initialize database (if needed)\n    orders_module.init_orders_db()\n    \n    app_module.app.config[\"TESTING\"] = True\n    with app_module.app.test_client() as c:\n        yield c\n    \n    # Clean up\n    os.remove(path)\n    shutil.rmtree(orders_module.EXPORT_DIR, ignore_errors=True)\n\ndef test_proof_xss_and_template_injection_are_prevented(client):\n    # Control: normal request should work\n    resp = client.get(\"/orders/receipt\")\n    assert resp.status_code == 200\n\n    # Test for XSS: script tag should not be reflected as-is\n    try:\n        body = client.get(\"/orders/receipt\", query_string={\"note\": \"<script>alert(1)</script>\"}).get_data(as_text=True)\n    except Exception:\n        body = \"\"\n    \n    # Test for Template Injection: expression should not evaluate to 4011\n    try:\n        math = client.get(\"/orders/receipt\", query_string={\"note\": \"{{1337*3}}\"}).get_data(as_text=True)\n    except Exception:\n        math = \"\"\n\n    assert \"<script>alert(1)</script>\" not in body\n    assert \"4011\" not in math\n"
+    },
+    {
+      "class": "path_traversal",
+      "finding": "orders.py:83",
+      "prepare": "ready",
+      "seconds": 10,
+      "attempts": 1,
+      "model": "qwen3-coder-aida:latest",
+      "on_reference_fix": "passed",
+      "valid": true,
+      "test": "import os\nimport shutil\nimport pytest\nfrom flask import Flask\n\n# Import the app module to access the INVOICE_DIR and other constants\nimport sys\nsys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))\nimport orders as orders_module\nimport app as app_module\n\n\n@pytest.fixture\ndef client():\n    # Set up the invoice directory and a test file\n    os.makedirs(orders_module.INVOICE_DIR, exist_ok=True)\n    test_invoice = \"INV-1001.txt\"\n    path = os.path.join(orders_module.INVOICE_DIR, test_invoice)\n    with open(path, \"w\") as f:\n        f.write(\"Invoice 1001: 3 x notebook\")\n    \n    # Initialize the database\n    orders_module.init_orders_db()\n    \n    app_module.app.config[\"TESTING\"] = True\n    with app_module.app.test_client() as c:\n        yield c\n    \n    # Clean up\n    os.remove(path)\n    shutil.rmtree(orders_module.EXPORT_DIR, ignore_errors=True)\n\n\ndef test_proof_path_traversal(client):\n    served = orders_module.INVOICE_DIR\n    \n    # Control: a file that really is in the served directory is served\n    resp = client.get(\"/orders/invoice/INV-1001.txt\")\n    assert resp.status_code == 200\n    \n    # Set up the canary file outside the served directory\n    canary = os.path.join(os.path.dirname(served), \"canary_secret.txt\")\n    with open(canary, \"w\") as f:\n        f.write(\"TOP-SECRET-CANARY\")\n    \n    try:\n        # Attempt path traversal attack\n        try:\n            resp = client.get(\"/orders/invoice/..%2Fcanary_secret.txt\")\n            leaked = resp.status_code == 200 and b\"TOP-SECRET-CANARY\" in resp.data\n        except Exception:\n            leaked = False\n    finally:\n        os.remove(canary)\n    \n    # The vulnerability allows reading the canary file, so this should fail if vulnerable\n    assert not leaked\n"
+    },
+    {
+      "class": "tls_verification",
+      "finding": "orders.py:89",
+      "prepare": "ready",
+      "seconds": 18,
+      "attempts": 2,
+      "model": "qwen3.5:35b-a3b",
+      "on_reference_fix": "passed",
+      "valid": true,
+      "test": "import pytest\nfrom unittest.mock import patch, MagicMock\nimport requests\n\n# Import the app module as done in the project's tests\nimport os\nimport sys\nsys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))\nimport app as app_module\n\n\n@pytest.fixture\ndef client():\n    # Set up minimal state required for the endpoint to run without crashing on startup\n    if not hasattr(app_module.orders, 'INVOICE_DIR'):\n        import orders\n        orders.INVOICE_DIR = \"/tmp/test_invoices\"\n        os.makedirs(orders.INVOICE_DIR, exist_ok=True)\n    \n    app_module.app.config[\"TESTING\"] = True\n    with app_module.app.test_client() as c:\n        yield c\n\n\ndef test_proof_tls_verification_is_not_disabled(client, monkeypatch):\n    \"\"\"Proves that verify=False is not passed to requests.post in the /notify endpoint.\"\"\"\n    \n    calls_made = []\n\n    class MockResponse:\n        status_code = 200\n        def json(self):\n            return {\"status\": \"ok\"}\n\n    def mock_post(*args, **kwargs):\n        # Record all keyword arguments passed to requests.post\n        calls_made.append(kwargs)\n        return MockResponse()\n\n    # Patch the specific function used in orders.py line 89: requests.post\n    with patch.object(requests, 'post', side_effect=mock_post):\n        try:\n            resp = client.post(\"/orders/notify\", json={\"order\": {\"id\": \"123\"}})\n            \n            # Ensure the endpoint was called and made an outgoing request attempt\n            assert len(calls_made) == 1, f\"Expected one call to requests.post, got {len(calls_made)}\"\n            \n            kwargs = calls_made[0]\n            \n            # The vulnerability is verify=False. \n            # If the fix is applied, 'verify' should either be True (default) or not present (defaults to True).\n            # We assert that it was NOT explicitly set to False.\n            if \"verify\" in kwargs:\n                assert kwargs[\"verify\"] is not False, f\"Certificate verification must not be disabled; found verify={kwargs['verify']}\"\n            \n        except Exception as e:\n            # If the endpoint fails due to network issues (e.g., DNS resolution of webhook URL), \n            # we still check if our mock was called. The test logic relies on the patch, so real errors shouldn't happen here unless mocking failed.\n            assert False, f\"Endpoint execution raised an unexpected exception: {e}\"\n\n    # Final assertion to ensure safety condition is met for all captured calls\n    for call_kwargs in calls_made:\n        if \"verify\" in call_kwargs:\n            assert call_kwargs[\"verify\"] is not False, \"Certificate verification must be enabled (verify != False)\"\n"
+    }
+  ],
+  "models": [
+    "qwen3.5:35b-a3b",
+    "qwen3-coder-aida:latest"
+  ]
+}

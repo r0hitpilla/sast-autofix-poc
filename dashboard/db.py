@@ -192,6 +192,26 @@ class OutboxMessage(Base):
     last_error: Mapped[str | None] = mapped_column(Text)
 
 
+class LlmCall(Base):
+    """One AI call a run made (LLM or Laya): tokens, time and what it was for.
+    Copied from the run report's llm_usage so usage can be summed over time."""
+    __tablename__ = "llm_calls"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("runs.id", ondelete="CASCADE"), index=True)
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    purpose: Mapped[str] = mapped_column(String(48), index=True)
+    model: Mapped[str] = mapped_column(String(160), index=True)
+    provider: Mapped[str] = mapped_column(String(32))
+    prompt_tokens: Mapped[int | None] = mapped_column(Integer)       # null: provider doesn't count (Laya)
+    completion_tokens: Mapped[int | None] = mapped_column(Integer)
+    duration_ms: Mapped[int] = mapped_column(Integer)
+    ok: Mapped[bool] = mapped_column(Boolean)
+    truncated: Mapped[bool] = mapped_column(Boolean, default=False)
+    ref: Mapped[str | None] = mapped_column(Text)
+    error: Mapped[str | None] = mapped_column(Text)
+
+
 class FindingRow(Base):
     __tablename__ = "findings"
 

@@ -14,7 +14,7 @@ from config import load_config
 from fixer import fix_finding
 from laya_client import LayaClient
 from ollama_client import OllamaClient
-from code_context import numbered_context
+from code_context import numbered_context, numbered_header
 from diff_utils import branch_hunks
 from pr import (
     build_line_comments,
@@ -26,7 +26,10 @@ from pr import (
 from provenance import provenance
 from report import FindingRecord, RunReport, write_report
 from risk import by_risk
+import observability
+import proof as proof_mod
 from fix_trust import fix_trust
+from llm_usage import UsageLedger, tag
 from history import fetch_history, fetch_policy, finding_history, history_note
 from scanner import scan
 from triage import triage_finding
@@ -180,7 +183,44 @@ def run_pipeline(
 ):
     """Scan the developer's branch (`base_branch`, e.g. SV) as a whole repo
     and propose fixes on `fix_branch` (default "<base>-fix") via a PR into
-    the developer's branch — never into main directly."""
+    the developer's branch — never into main directly.
+
+    Every AI call of the run is counted (tokens, time, purpose) into the run
+    report, and traced to Langfuse as one trace when that is switched on."""
+    cfg = load_config(config_path)
+    usage, tracer = UsageLedger(), observability.from_config(cfg)
+    repository = os.environ.get("GITHUB_REPO", "r0hitpilla/sast-poc-vuln-app")
+    session = os.environ.get("GITHUB_RUN_ID") or f"local-{int(time.time())}"
+    try:
+        with tracer.run(name=f"sast-autofix {repository} @ {base_branch or 'current'}", session_id=session,
+                        tags=["dry-run" if dry_run else "ci", "check-only" if check_only else "scan-and-fix"],
+                        metadata={"repository": repository, "branch": base_branch or ""}):
+            report = _run_pipeline(target_repo, config_path, dry_run, report_dir, base_branch,
+                                   fix_branch, check_only, usage=usage, tracer=tracer)
+    finally:
+        tracer.flush()
+        tracer.shutdown()
+    s = usage.summary()
+    if s["calls"]:
+        print(f"AI usage: {s['calls']} call(s), {s['prompt_tokens']:,} prompt + "
+              f"{s['completion_tokens']:,} completion tokens, {s['duration_ms'] / 1000:.0f}s of model time"
+              + (f", {s['errors']} failed" if s["errors"] else ""))
+    return report
+
+
+def _run_pipeline(
+    target_repo: str,
+    config_path: str,
+    dry_run: bool,
+    report_dir: str = "reports",
+    base_branch: str | None = None,
+    fix_branch: str | None = None,
+    check_only: bool = False,
+    usage: UsageLedger | None = None,
+    tracer=None,
+):
+    usage = usage if usage is not None else UsageLedger()
+    tracer = tracer if tracer is not None else observability.NullTracer()
     cfg = load_config(config_path)
     repo_full_name = os.environ.get("GITHUB_REPO", "r0hitpilla/sast-poc-vuln-app")
     github_client = None if dry_run else Github(auth=Auth.Token(os.environ["GITHUB_TOKEN"]))
@@ -193,6 +233,7 @@ def run_pipeline(
     fix_branch = fix_branch or f"{base_branch}-fix"
 
     report = RunReport(target=f"{repo_full_name if not dry_run else target_repo} @ {base_branch}")
+    report.usage = usage
     timings = report.timings
     started = datetime.now(timezone.utc)
     report.meta = {
@@ -215,7 +256,7 @@ def run_pipeline(
 
     with timed(timings, "scan"):
         findings = scan(target_repo, cfg.semgrep_rulesets, cfg.engines)
-    ollama = OllamaClient(host=cfg.ollama_host, model=cfg.ollama_model)
+    ollama = OllamaClient(host=cfg.ollama_host, model=cfg.ollama_model, usage=usage, tracer=tracer)
     # What earlier runs found and tried for this repository (empty if no dashboard).
     history = fetch_history(cfg.dashboard_url, repo_full_name, cfg.dashboard_token)
     # The published security policy decides what blocks and what may be fixed.
@@ -224,7 +265,7 @@ def run_pipeline(
     report.decisions = {fp: rec["decision"] for fp, rec in history.items() if rec.get("decision")}
     report.meta["provenance"]["policy_version"] = policy.version
     print(f"Security policy: {'v' + str(policy.version) if policy.version else 'strict default'}")
-    laya = LayaClient(model=cfg.laya_model)
+    laya = LayaClient(model=cfg.laya_model, usage=usage, tracer=tracer)
 
     # Every finding ends up in exactly one of these buckets — a human reading
     # the run output must be able to account for all of them, not just the
@@ -339,6 +380,20 @@ def run_pipeline(
             target = with_all_rules(finding, findings)
             if current is not None:
                 target = current_view(target, current)  # show the code as it is now
+            # Proof of fix: an exploit test that must fail on the code as it is now.
+            proof_test, proof_status, proof_reason = None, "off", ""
+            if cfg.proof_mode != "off":
+                with timed(timings, "proof of fix"):
+                    proof_test, proof_status, proof_reason = proof_mod.prepare(
+                        target, ollama, target_repo, cfg.fix_models,
+                        context=numbered_context(target_repo, target),
+                        header=numbered_header(target_repo, target.file),
+                        attempts=cfg.proof_attempts, timeout=cfg.proof_timeout, mode=cfg.proof_mode,
+                        rulesets=cfg.semgrep_rulesets, engines=cfg.engines,
+                    )
+                print(f"    [proof of fix] {proof_status}"
+                      + (f": {proof_test.path} (attempt {proof_test.attempts})" if proof_test else f": {proof_reason}"),
+                      file=sys.stderr, flush=True)
             fix_result = fix_finding(
                 target, ollama, repo, model=cfg.fix_models[0],
                 history=note,
@@ -353,6 +408,7 @@ def run_pipeline(
                 known_rules={f.rule_id for f in findings if f.file == finding.file},
                 fix_models=cfg.fix_models,
                 history=note,
+                proof=proof_test,
                 retriage=lambda f: triage_finding(
                     f, ollama, laya, cfg.threshold_fix, cfg.threshold_review,
                     max_rounds=cfg.triage_max_rounds,
@@ -361,9 +417,16 @@ def run_pipeline(
             )
         if validation_result.validated:
             # Laya's read of the accepted change. Advisory: it never gates anything.
-            validation_result.trust = fix_trust(laya, finding, validation_result)
+            with tag(purpose="laya_fix_trust", ref=f"{finding.file}:{finding.line}"):
+                validation_result.trust = fix_trust(laya, finding, validation_result)
             if validation_result.trust is not None:
                 print(f"    [fix trust] Laya {validation_result.trust:.2f}", file=sys.stderr, flush=True)
+        # The proof comes last: a proven test joins the fix (and its diff) only after the
+        # trust score has read the fix on its own. Any other test file is removed.
+        validation_result.proof = proof_mod.finalize(
+            proof_test, proof_status, proof_reason, validation_result, target_repo)
+        if validation_result.proof["status"] != "off":
+            print(f"    [proof of fix] {validation_result.proof['status']}", file=sys.stderr, flush=True)
         entries.append((triage_result, validation_result))
         if validation_result.validated and validation_result.note:
             # The scanner still matches here, so the count doesn't drop.

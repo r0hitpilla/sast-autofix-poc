@@ -13,11 +13,11 @@ import re
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session, selectinload
 
 from identity import distinct_locations, normalise_code
-from .db import FindingRow, Run, TrackedFinding
+from .db import FindingRow, LlmCall, Run, TrackedFinding
 
 SEVERITIES = ["Critical", "High", "Medium", "Low"]
 OPEN_ROUTES = ("fix", "review")
@@ -201,6 +201,77 @@ def stage_text(run: Run, key: str) -> str:
             + ("Merge gate passed." if run.gate_passed else f"Merge gate blocked on {run.blocking}."))
 
 
+def _usage_cols():
+    return (
+        func.count(LlmCall.id).label("calls"),
+        func.coalesce(func.sum(LlmCall.prompt_tokens), 0).label("prompt"),
+        func.coalesce(func.sum(LlmCall.completion_tokens), 0).label("completion"),
+        func.coalesce(func.sum(LlmCall.duration_ms), 0).label("ms"),
+        func.coalesce(func.sum(case((LlmCall.ok.is_(False), 1), else_=0)), 0).label("errors"),
+    )
+
+
+def _usage_row(r, **extra) -> dict:
+    prompt, completion = int(r.prompt), int(r.completion)
+    return {**extra, "calls": int(r.calls), "prompt_tokens": prompt, "completion_tokens": completion,
+            "total_tokens": prompt + completion, "duration_ms": int(r.ms), "errors": int(r.errors),
+            "avg_ms": int(r.ms / r.calls) if r.calls else 0}
+
+
+def usage_overview(session: Session, repository=None, since=None, top_runs=5) -> dict:
+    """Every AI call of the real (non-dry) runs in the window: totals, then by
+    model, by purpose, by day, and the runs that used the most tokens."""
+    def scoped(stmt):
+        stmt = stmt.join(Run, LlmCall.run_id == Run.id).where(Run.dry_run.is_(False))
+        return _filtered(stmt, repository, since)
+
+    cols = _usage_cols()
+    totals = session.execute(scoped(select(*cols))).one()
+    runs = session.scalar(scoped(select(func.count(func.distinct(LlmCall.run_id))))) or 0
+    by_model = session.execute(scoped(select(LlmCall.model, LlmCall.provider, *cols))
+                               .group_by(LlmCall.model, LlmCall.provider)).all()
+    by_purpose = session.execute(scoped(select(LlmCall.purpose, *cols)).group_by(LlmCall.purpose)).all()
+    day = func.date(LlmCall.at)
+    by_day = session.execute(scoped(select(day.label("day"), *cols)).group_by(day).order_by(day)).all()
+    heavy = session.execute(
+        scoped(select(Run.id, Run.repository, Run.base_branch, Run.started_at, *cols))
+        .group_by(Run.id, Run.repository, Run.base_branch, Run.started_at)
+        .order_by((func.coalesce(func.sum(LlmCall.prompt_tokens), 0)
+                   + func.coalesce(func.sum(LlmCall.completion_tokens), 0)).desc())
+        .limit(top_runs)).all()
+    by_total = lambda items: sorted(items, key=lambda i: -i["total_tokens"])  # noqa: E731
+    return {
+        "runs": runs,
+        "totals": _usage_row(totals),
+        "by_model": by_total([_usage_row(r, model=r.model, provider=r.provider) for r in by_model]),
+        "by_purpose": by_total([_usage_row(r, purpose=r.purpose) for r in by_purpose]),
+        "by_day": [_usage_row(r, day=str(r.day)) for r in by_day],
+        "top_runs": [_usage_row(r, run_id=r.id, repository=r.repository, branch=r.base_branch,
+                                started_at=iso(r.started_at)) for r in heavy],
+    }
+
+
+def run_usage(session: Session, run_id: str) -> dict:
+    """The AI calls of one run (empty for runs recorded before usage tracking)."""
+    cols = _usage_cols()
+    totals = session.execute(select(*cols).where(LlmCall.run_id == run_id)).one()
+    by_purpose = session.execute(select(LlmCall.purpose, *cols).where(LlmCall.run_id == run_id)
+                                 .group_by(LlmCall.purpose)).all()
+    by_model = session.execute(select(LlmCall.model, LlmCall.provider, *cols).where(LlmCall.run_id == run_id)
+                               .group_by(LlmCall.model, LlmCall.provider)).all()
+    slowest = session.scalars(select(LlmCall).where(LlmCall.run_id == run_id)
+                              .order_by(LlmCall.duration_ms.desc()).limit(5)).all()
+    return {
+        "totals": _usage_row(totals),
+        "by_purpose": sorted([_usage_row(r, purpose=r.purpose) for r in by_purpose], key=lambda i: -i["total_tokens"]),
+        "by_model": sorted([_usage_row(r, model=r.model, provider=r.provider) for r in by_model],
+                           key=lambda i: -i["total_tokens"]),
+        "slowest": [{"purpose": c.purpose, "model": c.model, "ref": c.ref, "duration_ms": c.duration_ms,
+                     "prompt_tokens": c.prompt_tokens, "completion_tokens": c.completion_tokens, "ok": c.ok}
+                    for c in slowest],
+    }
+
+
 def run_detail(session: Session, run_id: str) -> dict | None:
     run = session.get(Run, run_id, options=[selectinload(Run.findings)])
     if run is None:
@@ -215,6 +286,7 @@ def run_detail(session: Session, run_id: str) -> dict | None:
         "stages": stages,
         "provenance": run.provenance,
         "fix_branch_description": run.fix_branch_description,
+        "usage": run_usage(session, run.id),
         "patches": [
             {"finding_id": r.id, "title": cwe_title(r.cwe), "cwe": cwe_id(r.cwe), "file": r.file,
              "line": r.line, "diff": (r.fix or {}).get("diff"), "attempts": r.fix_attempts,
@@ -405,7 +477,10 @@ def pr_detail(session: Session, repository: str, number: int) -> dict | None:
                     "review": run.review, "rejected": run.rejected,
                     "scanned_distinct": distinct_locations((f.file, f.snippet) for f in run.findings),
                     "confirmed_distinct": distinct_locations(
-                        (f.file, f.snippet) for f in run.findings if f.route == "fix")},
+                        (f.file, f.snippet) for f in run.findings if f.route == "fix"),
+                    # fixes an exploit test backs: it failed on the original code and passes now
+                    "proven": sum(1 for f in run.findings
+                                  if ((f.fix or {}).get("proof") or {}).get("status") == "proven")},
         "validation": {"state": run.fix_branch_state, "description": run.fix_branch_description},
         "gate": {"passed": base_gate.gate_passed if base_gate else None,
                  "blocking": base_gate.blocking if base_gate else None,

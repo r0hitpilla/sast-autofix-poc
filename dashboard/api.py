@@ -171,6 +171,13 @@ def pr(owner: str, name: str, number: int, live: bool = True,
     return detail
 
 
+@app.get("/api/usage")
+def usage(repository: str | None = Repo, days: int = Query(30, ge=1, le=365),
+          session: Session = Depends(get_session)):
+    """AI usage (tokens, calls, time) over the window, by model, purpose and day."""
+    return queries.usage_overview(session, repository, _since(days))
+
+
 @app.get("/api/models")
 def models(session: Session = Depends(get_session)):
     latest = queries.list_runs(session, limit=1)["items"]

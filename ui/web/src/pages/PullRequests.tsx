@@ -65,7 +65,8 @@ export function PullRequestDetail() {
               <Kpis items={[
                 { label: "Findings scanned", value: `${p.summary.scanned_distinct} distinct`, detail: `${p.summary.scanned} rule hit(s)` },
                 { label: "Confirmed", value: `${p.summary.confirmed_distinct} distinct`, detail: `${p.summary.confirmed} rule hit(s)` },
-                { label: "Fixed in this PR", value: p.summary.fixed, valueTone: "green" },
+                { label: "Fixed in this PR", value: p.summary.fixed, valueTone: "green",
+                  detail: p.summary.proven ? `${p.summary.proven} proven by an exploit test` : undefined },
                 { label: "Needs review", value: p.summary.review, valueTone: p.summary.review ? "amber" : undefined },
                 { label: "Rejected (false positive)", value: p.summary.rejected },
               ]} />

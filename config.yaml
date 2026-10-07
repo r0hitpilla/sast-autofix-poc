@@ -23,5 +23,23 @@ semgrep:
     - p/security-audit
     - p/owasp-top-ten
     - rules/   # custom rules (e.g. Flask path traversal) the public packs miss
+# Trace every AI call (tokens, latency, purpose, optionally the prompt) to a
+# self-hosted Langfuse. Set up with deploy/langfuse/setup.sh. The API keys are
+# read from LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY or ~/.config/sast-autofix/langfuse.env.
+observability:
+  langfuse:
+    enabled: true
+    host: http://127.0.0.1:3000
+    allow_cloud: false       # Langfuse Cloud is refused: prompts contain your source code
+    capture_content: true    # false = send tokens, timings and purpose only, never prompts
+# Proof of fix: a model writes an exploit test per finding. It must fail on the
+# vulnerable code and pass on the fix; a proven test is committed as a regression test.
+#   off       no proof tests
+#   advisory  record and show the result; a refuted fix is flagged but still offered
+#   required  a fix whose exploit test still succeeds is rejected and retried
+proof_of_fix:
+  mode: advisory
+  attempts: 3
+  timeout_seconds: 60
 fix_review: true    # LLM reviews each fix against best practice before accepting it
 max_fix_retries: 5   # LLM re-fix + rescan rounds after the first attempt (a fix must validate, not just exist)

@@ -289,3 +289,20 @@ def test_never_usable_reply_reports_no_usable_fix():
     assert result.failure == "no usable fix"
     assert result.attempts == 3
     mock_scan.assert_not_called()  # nothing applied, nothing to rescan
+
+
+def test_an_undefined_name_failure_tells_the_model_how_to_repair_it(tmp_path):
+    from unittest.mock import patch
+
+    import validator
+    from models import Finding
+
+    repo = tmp_path
+    (repo / "tests").mkdir()
+    (repo / "orders.py").write_text("def export(name):\n    abort(400)\n")     # abort is used but never imported
+    finding = Finding(file="orders.py", line=2, rule_id="r", cwe="CWE-78", message="m", snippet="x")
+    with patch.object(validator, "scan", return_value=[]):
+        _, tests_passed, output, _ = validator._check(
+            str(repo), [], finding, baseline_content="def export(name):\n    pass\n", known_rules=None, created_files=[])
+    assert tests_passed is False
+    assert "undefined name 'abort'" in output and "Add the missing import" in output

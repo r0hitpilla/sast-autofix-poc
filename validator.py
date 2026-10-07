@@ -7,6 +7,7 @@ import pyflakes.messages
 
 from code_context import dependency_summary
 from fix_review import file_diff, review_fix
+import proof as proof_mod
 from fix_guard import added_risks
 from hallucination import check_references
 from fixer import fix_finding, remove_created, restore_file
@@ -91,7 +92,9 @@ def tail(text: str, limit: int) -> str:
     return text if len(text) <= limit else "…" + text[-limit:]
 
 
-def run_test_suite(target_repo: str) -> tuple[bool, str]:
+def run_test_suite(target_repo: str, ignore: tuple = ()) -> tuple[bool, str]:
+    """The project's own tests. `ignore` leaves out files judged separately
+    (the exploit test of the fix being checked)."""
     if not os.path.isdir(os.path.join(target_repo, "tests")):
         return True, "no tests found"
 
@@ -101,7 +104,7 @@ def run_test_suite(target_repo: str) -> tuple[bool, str]:
         # target_repo/target_repo/tests.
         # -q --tb=short -rf: the failure summary is short and sits at the
         # end, which is the part callers keep (see tail()).
-        [_pytest_for(target_repo), "tests", "-q", "--tb=short", "-rf"],
+        [_pytest_for(target_repo), "tests", "-q", "--tb=short", "-rf", *[f"--ignore={p}" for p in ignore]],
         capture_output=True,
         text=True,
         cwd=target_repo,
@@ -126,10 +129,11 @@ def _check(
     known_rules: set | None = None,
     created_files: list[str] | None = None,
     engines=("semgrep",),
+    proof=None,
 ):
     rescanned = scan(target_repo, semgrep_rulesets, engines)
     still_present = finding_still_present(finding, rescanned, baseline_count)
-    tests_passed, test_output = run_test_suite(target_repo)
+    tests_passed, test_output = run_test_suite(target_repo, ignore=(proof.path,) if proof else ())
     if known_rules is not None:
         # A fix that trades one finding for another (escaping XSS via
         # render_template_string -> template injection) is not a fix.
@@ -168,9 +172,25 @@ def _check(
         broken = broken + risky
     if broken:
         tests_passed = False
+        hint = ""
+        if any("undefined name" in b for b in broken):
+            hint = (" Add the missing import(s) next to the file's other imports, as their own edit block at "
+                    "the top of the file (for example `abort` belongs in the existing `from flask import ...` line).")
         test_output = (
-            f"The fix broke {finding.file}: " + "; ".join(broken) + "\n" + test_output
+            f"The fix broke {finding.file}: " + "; ".join(broken) + "." + hint + "\n" + test_output
         )
+    if proof is not None:
+        # The exploit test for THIS finding: it failed on the vulnerable code, so
+        # it must pass now. Judged apart from the project's own tests.
+        outcome, output = proof_mod.run_test(target_repo, proof.path, proof.timeout)
+        proof.outcome, proof.fixed_output = outcome, output
+        print(f"    [proof of fix] exploit test {outcome}", file=sys.stderr, flush=True)
+        if outcome == "failed" and proof.mode == "required":
+            tests_passed = False
+            test_output = (
+                "The exploit test still succeeds, so the vulnerability is not fixed. "
+                "Make the attack fail.\n" + output + "\n" + test_output
+            )
     remaining = sorted(
         (f for f in rescanned if f.rule_id == finding.rule_id and f.file == finding.file),
         key=lambda f: f.line,
@@ -291,6 +311,7 @@ def validate_and_retry(
     fix_models: list[str] | None = None,
     engines=("semgrep",),
     history: str = "",
+    proof=None,
 ) -> ValidationResult:
     """Validate an already-applied fix; on failure feed the reason back to the
     LLM for a new fix, up to `max_retries` more attempts.
@@ -319,7 +340,7 @@ def validate_and_retry(
             # Every attempt gets validated, including the last one.
             still_present, tests_passed, test_output, remaining = _check(
                 target_repo, semgrep_rulesets, finding, baseline_count, baseline,
-                known_rules, current_fix.created_files, engines,
+                known_rules, current_fix.created_files, engines, proof,
             )
             _progress(finding, attempts, still_present, tests_passed)
             outcome = _assess(

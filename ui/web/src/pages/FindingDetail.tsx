@@ -4,6 +4,7 @@ import type { FindingDetail as FindingData } from "../api/types";
 import { useApi } from "../api/useApi";
 import { CodeView, DiffView } from "../components/code";
 import { Decision } from "../components/Decision";
+import { ProofOfFix } from "../components/ProofOfFix";
 import { Shell } from "../components/Shell";
 import { AiTag, Async, Card, Empty, FixStatusPill, PageHead, Pill, SeverityPill } from "../components/ui";
 import { carry, useFilters } from "../lib/filters";
@@ -73,6 +74,7 @@ export function FindingDetail() {
                       )}
                     </Card>
                   )}
+                  <ProofOfFix proof={f.fix?.proof} />
                   <Decision finding={f} onChange={state.reload} />
                   <Card title="Context">
                     <div className="kv">

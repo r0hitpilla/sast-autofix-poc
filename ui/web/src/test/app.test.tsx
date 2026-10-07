@@ -157,3 +157,64 @@ describe("policies", () => {
     expect(screen.getByRole("button", { name: "Publish v1" })).toBeDisabled();
   });
 });
+
+describe("AI usage", () => {
+  const row = (extra = {}) => ({ calls: 4, prompt_tokens: 12000, completion_tokens: 3400, total_tokens: 15400,
+                                 duration_ms: 42000, errors: 0, avg_ms: 10500, ...extra });
+  const models = { ollama: { online: true, version: "0.9", api_latency_ms: 4, models: [] }, provenance: null };
+
+  it("shows tokens and time by model and purpose on the Models page", async () => {
+    mockApi({ ...shellApi, "/models": models, "/usage": {
+      runs: 3, totals: row(),
+      by_model: [{ ...row(), model: "qwen3.5:35b-a3b", provider: "ollama" },
+                 { ...row({ prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }), model: "laya", provider: "laya" }],
+      by_purpose: [{ ...row(), purpose: "fix" }, { ...row(), purpose: "laya_triage" }],
+      by_day: [{ ...row(), day: "2026-10-07" }],
+      top_runs: [{ ...row(), run_id: "42", repository: "o/r", branch: "main", started_at: null }],
+    } });
+    at("/models");
+    expect(await screen.findByText("AI usage, last 30 days")).toBeInTheDocument();
+    expect(screen.getByText("qwen3.5:35b-a3b")).toBeInTheDocument();
+    expect(screen.getByText("Fix writing")).toBeInTheDocument();
+    expect(screen.getByText("Laya: finding score")).toBeInTheDocument();
+    expect(screen.getAllByText("15k").length).toBeGreaterThan(0);        // 15,400 tokens, read not counted
+  });
+
+  it("says so when nothing has been recorded yet", async () => {
+    mockApi({ ...shellApi, "/models": models, "/usage": {
+      runs: 0, totals: row({ calls: 0, total_tokens: 0 }), by_model: [], by_purpose: [], by_day: [], top_runs: [] } });
+    at("/models");
+    expect(await screen.findByText(/No AI calls recorded in the last 30 days/)).toBeInTheDocument();
+  });
+});
+
+describe("proof of fix", () => {
+  const withProof = (proof: object) => ({
+    ...finding, fix: { validated: true, scanner_clean: true, attempts: 1, failure: null, note: null,
+                       diff: "+x\n", created_files: [], check_output: null, last_proposal: null, proof },
+  });
+
+  it("shows a proven fix with the test that proves it", async () => {
+    mockApi({ ...shellApi, "/findings/5": withProof({ status: "proven", test: "tests/test_security_cwe601_app_117.py",
+                                                        model: "qwen3-coder", attempts: 2, code: "def test_proof_redirect(): ..." }) });
+    at("/findings/5");
+    expect(await screen.findByText("Proof of fix")).toBeInTheDocument();
+    expect(screen.getByText("Attack blocked")).toBeInTheDocument();
+    expect(screen.getByText(/tests\/test_security_cwe601_app_117.py/)).toBeInTheDocument();
+    expect(screen.getByText("The exploit test")).toBeInTheDocument();
+  });
+
+  it("flags a refuted fix and shows why the exploit still works", async () => {
+    mockApi({ ...shellApi, "/findings/5": withProof({ status: "refuted", fixed_output: "assert 'evil.example' not in location" }) });
+    at("/findings/5");
+    expect(await screen.findByText("Attack still works")).toBeInTheDocument();
+    expect(screen.getByText(/assert 'evil.example' not in location/)).toBeInTheDocument();
+  });
+
+  it("shows nothing for findings the scanner proves on its own", async () => {
+    mockApi({ ...shellApi, "/findings/5": withProof({ status: "not_applicable", reason: "the scanner is the proof" }) });
+    at("/findings/5");
+    await screen.findByText("Applied fix");
+    expect(screen.queryByText("Proof of fix")).not.toBeInTheDocument();
+  });
+});

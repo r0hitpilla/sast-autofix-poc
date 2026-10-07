@@ -70,8 +70,10 @@ def fix_trust(laya, finding: Finding, validation: ValidationResult) -> float | N
     be given: never raises, because a scoring problem must not fail a run."""
     if not validation.validated or not validation.fix_diff:
         return None
-    if suspicious(validation.fix_diff):
-        # Text in the changed code is aimed at the AI: don't let it steer a score.
+    # Only the lines Laya is shown can steer its score. Unchanged context (a comment
+    # next to the fix, say) never reaches it, so it must not block the score either.
+    if suspicious(condensed_change(validation.fix_diff, limit=10 ** 9)):
+        # The fix itself adds or removes text aimed at the AI: don't score it.
         return None
     try:
         score, _ = laya.assess(build_fix_state(finding, validation), FIX_QUESTION, {})

@@ -2,6 +2,7 @@ import re
 import sys
 
 from injection import FENCE_RULE, fence, suspicious
+from llm_usage import tag
 from models import Finding, TriageResult
 
 TRIAGE_QUESTION = "is this a true positive security vulnerability"
@@ -195,14 +196,17 @@ def triage_finding(
     is the verdict.
     """
     prompt = build_reasoning_prompt(finding, context, history)
+    ref = f"{finding.file}:{finding.line}"
     try:
-        initial = ollama.generate(prompt)
+        with tag(purpose="triage", ref=ref):
+            initial = ollama.generate(prompt)
     except Exception as first:
         # One retry without hidden reasoning: a runaway "thinking" loop is
         # the usual cause, and the same prompt without it rarely loops.
         print(f"[triage warning: {first}; retrying without hidden reasoning]", file=sys.stderr)
         try:
-            initial = ollama.generate(prompt, think=False)
+            with tag(purpose="triage", ref=ref):
+                initial = ollama.generate(prompt, think=False)
         except Exception as exc:
             initial = None
             failure = exc
@@ -229,9 +233,10 @@ def triage_finding(
             if rounds < max_rounds else {}
         )
         try:
-            score, choice = laya.assess(
-                build_laya_state(finding, evidence), TRIAGE_QUESTION, options
-            )
+            with tag(purpose="laya_triage", ref=ref):
+                score, choice = laya.assess(
+                    build_laya_state(finding, evidence), TRIAGE_QUESTION, options
+                )
         except Exception as exc:
             # Annotate rather than silently returning 0.0: a reader (and the
             # PR body) must be able to tell a Laya failure apart from a
@@ -259,9 +264,10 @@ def triage_finding(
         _, question = remaining.pop(choice)
         rounds += 1
         try:
-            answer = ollama.generate(
-                build_followup_prompt(finding, context, evidence, question)
-            )
+            with tag(purpose="triage_followup", ref=ref):
+                answer = ollama.generate(
+                    build_followup_prompt(finding, context, evidence, question)
+                )
         except Exception as exc:
             print(
                 f"[triage warning: follow-up '{choice}' failed for "

@@ -300,3 +300,16 @@ def test_the_fix_trust_score_reaches_the_finding_detail(Session):
     with Session() as s:
         detail = queries.finding_detail(s, run.findings[0].id)
     assert detail["fix"]["trust"] == 0.83 and detail["fix"]["review"] == "uses a constant template"
+
+
+def test_the_proof_of_fix_reaches_the_finding_page_and_is_counted_on_the_pr(Session):
+    f = finding("proof-1", 5, "CWE-79: x", "High", "fix", "fixed and validated", True, 1)
+    f["fix"]["proof"] = {"status": "proven", "test": "tests/test_security_cwe79_a_5.py", "code": "def test_proof_x(): ..."}
+    g = finding("proof-2", 9, "CWE-79: x", "High", "fix", "fixed and validated", True, 1)
+    g["fix"]["proof"] = {"status": "unproven", "reason": "no valid test"}
+    run = ingest(report("p1", pr=21, findings=[f, g]), Session)
+    with Session() as s:
+        detail = queries.finding_detail(s, run.findings[0].id)
+        pr = queries.pr_detail(s, "o/r", 21)
+    assert detail["fix"]["proof"]["status"] == "proven" and detail["fix"]["proof"]["test"].endswith("_a_5.py")
+    assert pr["summary"]["proven"] == 1

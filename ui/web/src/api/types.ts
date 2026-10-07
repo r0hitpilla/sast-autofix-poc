@@ -34,9 +34,15 @@ export interface Provenance {
   max_fix_retries?: number; fix_review?: boolean; rulesets?: string[];
 }
 
+export type ProofStatus = "proven" | "refuted" | "unproven" | "not_applicable" | "off";
+export interface ProofRecord {
+  status: ProofStatus; reason?: string | null; mode?: string | null; test?: string; class?: string;
+  model?: string; attempts?: number; code?: string; vulnerable_output?: string; fixed_output?: string;
+}
+
 export interface FixRecord {
   validated: boolean; scanner_clean: boolean; attempts: number; failure: string | null;
-  trust?: number | null; review?: string | null;
+  trust?: number | null; review?: string | null; proof?: ProofRecord | null;
   note: string | null; diff: string | null; created_files: string[];
   check_output: string | null; last_proposal: string | null;
 }
@@ -60,7 +66,25 @@ export interface Patch {
 }
 export interface RunDetail extends RunSummary {
   stages: Stage[]; provenance: Provenance; fix_branch_description: string | null;
-  patches: Patch[]; findings: FindingSummary[];
+  patches: Patch[]; findings: FindingSummary[]; usage?: RunUsage;
+}
+
+/** What AI calls cost: Laya reports no tokens, so its rows have zero tokens and a call count. */
+export interface UsageRow {
+  calls: number; prompt_tokens: number; completion_tokens: number; total_tokens: number;
+  duration_ms: number; errors: number; avg_ms: number;
+}
+export type ByModel = UsageRow & { model: string; provider: string };
+export type ByPurpose = UsageRow & { purpose: string };
+export interface RunUsage {
+  totals: UsageRow; by_purpose: ByPurpose[]; by_model: ByModel[];
+  slowest: { purpose: string; model: string; ref: string | null; duration_ms: number;
+             prompt_tokens: number | null; completion_tokens: number | null; ok: boolean }[];
+}
+export interface UsageOverview {
+  runs: number; totals: UsageRow; by_model: ByModel[]; by_purpose: ByPurpose[];
+  by_day: (UsageRow & { day: string })[];
+  top_runs: (UsageRow & { run_id: string; repository: string; branch: string; started_at: string | null })[];
 }
 
 export interface Overview {
@@ -93,7 +117,7 @@ export interface PrDetail {
   number: number; url: string | null; repository: string; head: string | null; base: string;
   run: RunSummary;
   summary: { scanned: number; confirmed: number; fixed: number; review: number; rejected: number;
-             scanned_distinct: number; confirmed_distinct: number };
+             scanned_distinct: number; confirmed_distinct: number; proven?: number };
   validation: { state: string | null; description: string | null };
   gate: { passed: boolean | null; blocking: number | null; run_id: string | null };
   findings: FindingSummary[]; live: PrLive;

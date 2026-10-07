@@ -1,13 +1,17 @@
-import type { ModelsInfo } from "../api/types";
+import type { ModelsInfo, UsageOverview } from "../api/types";
 import { useApi } from "../api/useApi";
 import { Shell } from "../components/Shell";
+import { AiUsage } from "../components/AiUsage";
 import { Async, B, Card, DataTable, M, PageHead, Pill } from "../components/ui";
 import { ProvenanceList } from "./RunDetail";
 
 const gb = (b: number | null) => (b ? `${(b / 2 ** 30).toFixed(1)} GB` : "—");
 
+const USAGE_DAYS = 30;
+
 export function Models() {
   const state = useApi<ModelsInfo>("/models", 30000);
+  const usage = useApi<UsageOverview>(`/usage?days=${USAGE_DAYS}`, 60000);
   return (
     <Shell crumb="Models">
       <Async state={state}>
@@ -32,6 +36,7 @@ export function Models() {
                   {d.provenance ? <ProvenanceList p={d.provenance} /> : <div className="mute">No runs recorded yet.</div>}
                 </Card>
               </div>
+              <Async state={usage}>{(u) => <AiUsage usage={u} days={USAGE_DAYS} />}</Async>
               <Card title="Installed models" flush>
                 <DataTable rowKey={(m) => m.name} rows={o.models}
                   columns={[
