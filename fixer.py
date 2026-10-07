@@ -31,6 +31,11 @@ without the line-number prefix — just enough to be unique)
 (the replacement lines)
 >>>>>>> FIXED
 
+Only edit lines you can see in the numbered file contents above. Never
+reconstruct or guess code you were not shown: if other code calls what you
+change, keep the same function names and signatures so the callers keep
+working without edits.
+
 Use a separate block for each separate place you change. If you need a new
 import, add it next to the file's existing imports at the top (its own edit
 block), never inside a function, and never re-import a name the file already
@@ -220,12 +225,18 @@ def apply_edits(repo, file: str, edits: list[tuple[str, str]]) -> tuple[bool, st
     for n, (original, replacement) in enumerate(edits, start=1):
         updated = apply_edit(content, original, replacement)
         if updated is None:
-            where = "appears more than once" if content.count(original) > 1 else "was not found"
+            if content.count(original) > 1:
+                return False, (
+                    f"The ORIGINAL text of edit block {n} appears more than once in {file}. "
+                    "Include more surrounding lines so it is unique."
+                )
+            # Don't echo the invented text back: shown its own guess, the model
+            # tends to repeat it. Say plainly that this code doesn't exist.
             return False, (
-                f"The ORIGINAL text of edit block {n} {where} in {file}. Copy "
-                "the ORIGINAL lines exactly from the numbered file contents "
-                "(without the line numbers), with enough lines to be unique:\n"
-                f"{original.rstrip()[:500]}"
+                f"Edit block {n} edits code that is not in {file}: its ORIGINAL lines don't "
+                "exist there. You were not shown that code, so don't edit it. Change only "
+                "lines from the numbered file contents, keep function names and signatures "
+                "the same, and send only the blocks that are needed."
             )
         content = updated
     with open(os.path.join(repo.working_tree_dir, file), "w", newline="") as f:

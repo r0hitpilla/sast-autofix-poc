@@ -36,6 +36,7 @@ export interface Provenance {
 
 export interface FixRecord {
   validated: boolean; scanner_clean: boolean; attempts: number; failure: string | null;
+  trust?: number | null; review?: string | null;
   note: string | null; diff: string | null; created_files: string[];
   check_output: string | null; last_proposal: string | null;
 }

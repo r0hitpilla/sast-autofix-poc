@@ -105,3 +105,35 @@ def test_real_stdlib_attribute_passes():
     from hallucination import unknown_stdlib_attributes
     after = "import hmac\nimport hashlib\nok = hmac.compare_digest(a, b)\nd = hashlib.scrypt(b'x')\n"
     assert unknown_stdlib_attributes("app.py", "", after) == []
+
+
+# ---- playbooks for the common classes ---------------------------------------
+
+import pytest as _pytest
+
+from playbooks import (COMMAND_INJECTION, OPEN_REDIRECT, PATH_TRAVERSAL, SQL_INJECTION,
+                       TEMPLATE_INJECTION, TLS_VERIFICATION, UNSAFE_YAML)
+
+
+@_pytest.mark.parametrize("rule,cwe,snippet,expected", [
+    ("python.flask.security.open-redirect.open-redirect", "CWE-601: URL Redirection", "return redirect(request.args.get('next'))", OPEN_REDIRECT),
+    ("python.lang.security.audit.formatted-sql-query.tainted-sql-string", "CWE-704: Incorrect Type Conversion", "q = f\"SELECT {x}\"", SQL_INJECTION),
+    ("python.flask.security.injection.sql-injection-db-cursor-execute", "CWE-89: SQL Injection", "c = request.args.get('c')", SQL_INJECTION),
+    ("python.lang.security.audit.subprocess-shell-true.subprocess-shell-true", "CWE-78: OS Command Injection", "subprocess.run(cmd, shell=True)", COMMAND_INJECTION),
+    ("python.lang.security.deserialization.avoid-pyyaml-load.avoid-pyyaml-load", "CWE-502: Deserialization", "yaml.load(data, Loader=yaml.Loader)", UNSAFE_YAML),
+    ("python.flask.security.injection.raw-html-format.raw-html-format", "CWE-96: Improper Neutralization", "render_template_string(f'<p>{n}</p>')", TEMPLATE_INJECTION),
+    ("python.flask.security.audit.directly-returned-format-string", "CWE-79: XSS", "return f'<h1>{name}</h1>'", TEMPLATE_INJECTION),
+    ("flask-send-file-path-traversal", "CWE-22: Path Traversal", "send_file(os.path.join(D, name))", PATH_TRAVERSAL),
+    ("python.requests.security.disabled-cert-validation.disabled-cert-validation", "CWE-295: Improper Certificate Validation", "requests.post(u, verify=False)", TLS_VERIFICATION),
+])
+def test_each_common_class_gets_its_known_good_shape(rule, cwe, snippet, expected):
+    assert guidance_for(finding(rule_id=rule, cwe=cwe, snippet=snippet)) == expected
+
+
+def test_pickle_deserialization_has_no_yaml_advice():
+    f = finding(rule_id="python.lang.security.deserialization.avoid-pickle", cwe="CWE-502: Deserialization", snippet="pickle.loads(x)")
+    assert guidance_for(f) == ""
+
+
+def test_the_secret_playbook_keeps_import_working():
+    assert "inside the function that uses it" in HARD_CODED_SECRET

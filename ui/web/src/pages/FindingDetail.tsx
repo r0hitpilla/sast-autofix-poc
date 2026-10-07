@@ -54,6 +54,13 @@ export function FindingDetail() {
                       {f.fix.note && <div className="pill tone-amber" style={{ whiteSpace: "normal", marginBottom: 10 }}>⚠ {f.fix.note}</div>}
                       <DiffView diff={f.fix.diff} />
                       <div className="mute" style={{ fontSize: 12, marginTop: 8 }}>Validated after {f.fix.attempts} attempt(s): rescan, no new findings, broken-code check, tests and AI review.</div>
+                      {f.fix.trust != null && (
+                        <div className="fix-trust" title="Laya's read of the change itself. Advisory and uncalibrated: the verified checks above are what decide.">
+                          <span className="mute">Laya fix trust</span> <span className="mono">{pct(f.fix.trust, 0)}</span>
+                          <span className="mute" style={{ fontSize: 11 }}> advisory</span>
+                        </div>
+                      )}
+                      {f.fix.review && <div className="mute" style={{ fontSize: 12, marginTop: 4 }}>AI review: {f.fix.review}</div>}
                     </Card>
                   )}
                   {f.fix && !f.fix.validated && (

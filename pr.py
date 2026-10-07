@@ -132,6 +132,20 @@ def build_suggestions(unresolved) -> str:
     return "\n".join(parts)
 
 
+def trust_line(validation) -> str:
+    """Laya's score for the fix itself. Worded as advisory: it is Laya's read of
+    the change, uncalibrated, and the verified checks below it are what decide."""
+    if getattr(validation, "trust", None) is None:
+        return ""
+    return (f"**Laya fix trust:** {validation.trust:.2f} "
+            "_(Laya's read of the change itself. Advisory: the checks below decide.)_\n\n")
+
+
+def trust_inline(validation) -> str:
+    trust = getattr(validation, "trust", None)
+    return "" if trust is None else f"fix trust {trust:.2f} · "
+
+
 def injection_warning(triage) -> str:
     """A visible note when the scanned code tried to talk to the model."""
     if not getattr(triage, "injection", None):
@@ -202,6 +216,7 @@ def build_pr_body(
         section += (
             f"**Laya confidence:** {triage.laya_score:.2f} "
             f"(after {follow_ups} follow-up question(s) to the LLM)\n\n"
+            f"{trust_line(validation)}"
             "<details><summary>Triage reasoning</summary>\n\n"
             f"{triage.llm_reasoning}\n\n</details>\n\n"
             f"**Validated:** {_validation_note(validation)} "
@@ -253,6 +268,7 @@ def build_line_comments(
                 f"(`{finding.rule_id}`), flagged at original line "
                 f"{finding.line}.\n\n"
                 f"Laya confidence {triage.laya_score:.2f} · "
+                f"{trust_inline(validation)}"
                 f"{_validation_note(validation)} · "
                 f"fix attempt {validation.attempts}"
             )

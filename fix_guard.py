@@ -12,6 +12,7 @@ use it after the fix (fixing shell=True, for example).
 
 import ast
 import os
+import re
 
 # Dotted names: a module counts if it is one of these or inside one.
 # urllib.parse and http.cookies only parse text, so they are not listed.
@@ -85,11 +86,20 @@ def describe(cap: str) -> str:
     return f"{'import of ' if kind == 'module' else ''}{name} ({why})"
 
 
+# Comments that make a scanner skip a line. Adding one makes the rescan go clean
+# without fixing anything, so a fix may never add one.
+SUPPRESSION = re.compile(r"(#|//)\s*(nosec|nosemgrep|nosonar|lgtm\b|noqa:\s*S\d)", re.IGNORECASE)
+
+
 def added_risks(file: str, before: str | None, after: str | None) -> list[str]:
-    if not file.endswith(".py"):
-        return []
-    new = capabilities(after) - capabilities(before)
-    return [f"the fix adds {describe(c)}, which a security fix never needs" for c in sorted(new)]
+    problems = []
+    if len(SUPPRESSION.findall(after or "")) > len(SUPPRESSION.findall(before or "")):
+        problems.append("the fix adds a scanner-suppression comment (nosec, nosemgrep...), "
+                        "which hides the finding instead of fixing it")
+    if file.endswith(".py"):
+        new = capabilities(after) - capabilities(before)
+        problems += [f"the fix adds {describe(c)}, which a security fix never needs" for c in sorted(new)]
+    return problems
 
 
 def forbidden_new_file(path: str) -> str | None:

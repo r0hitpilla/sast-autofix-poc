@@ -121,16 +121,17 @@ def to_markdown(report: RunReport) -> str:
     lines += [
         "## Findings",
         "",
-        "| Location | CWE | Laya score | Laya asked the LLM about | Verdict | Outcome | Fix attempts |",
-        "|---|---|---|---|---|---|---|",
+        "| Location | CWE | Laya score | Laya asked the LLM about | Verdict | Outcome | Fix attempts | Fix trust |",
+        "|---|---|---|---|---|---|---|---|",
     ]
     for r in report.records:
         f = r.triage.finding
         asked = ", ".join(_short_question(q) for q, _ in r.triage.evidence[1:]) or "—"
         attempts = r.validation.attempts if r.validation else "—"
+        trust = f"{r.validation.trust:.2f}" if r.validation and r.validation.trust is not None else "—"
         lines.append(
             f"| `{f.file}:{f.line}` | {f.cwe} | {r.triage.laya_score:.2f} | {asked} "
-            f"| {r.triage.route} | {r.outcome} | {attempts} |"
+            f"| {r.triage.route} | {r.outcome} | {attempts} | {trust} |"
         )
 
     if report.residual:
@@ -178,6 +179,8 @@ def _record_json(r: FindingRecord, repository: str = "") -> dict:
         "outcome": r.outcome,
         "fix": None if v is None else {
             "validated": v.validated,
+            "trust": v.trust,
+            "review": v.review or None,
             "scanner_clean": v.clean,
             "attempts": v.attempts,
             "failure": v.failure or None,

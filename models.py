@@ -70,6 +70,10 @@ class ValidationResult:
     fix_diff: str = ""
     # New files the accepted fix created; committed alongside the fix.
     created_files: list[str] = field(default_factory=list)
+    # The AI security review's one-sentence reason, when it approved the fix.
+    review: str = ""
+    # Laya's trust score for the accepted fix (see fix_trust.py); advisory only.
+    trust: float | None = None
 
 
 @dataclass

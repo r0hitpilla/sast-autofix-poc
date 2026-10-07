@@ -241,6 +241,7 @@ def _assess(
     for path in created_files:
         diff += file_diff(path, "", _read(target_repo, path))
     if tests_passed and not still_present:
+        reason = ""
         if review:
             approved, reason = review_fix(
                 ollama, finding, diff, dependency_summary(target_repo)
@@ -255,7 +256,7 @@ def _assess(
         return ValidationResult(
             finding=finding, clean=True, test_output=test_output,
             validated=True, attempts=attempts, fix_diff=diff,
-            created_files=list(created_files),
+            created_files=list(created_files), review=reason if review else "",
         )
 
     if tests_passed and still_present and retriage is not None and remaining:

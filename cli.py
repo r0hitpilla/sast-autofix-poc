@@ -26,6 +26,7 @@ from pr import (
 from provenance import provenance
 from report import FindingRecord, RunReport, write_report
 from risk import by_risk
+from fix_trust import fix_trust
 from history import fetch_history, fetch_policy, finding_history, history_note
 from scanner import scan
 from triage import triage_finding
@@ -109,6 +110,23 @@ def with_all_rules(finding, findings):
         finding,
         message=f"{finding.message}\nThe same line is also flagged by:\n{extra}",
     )
+
+
+def current_view(finding, current):
+    """`finding` as the code looks NOW, after earlier fixes in this run.
+
+    A finding keeps the line and snippet from the first scan. When an earlier
+    fix rewrote that code (two rules often flag one line, and the first fix
+    changes it), the fixer would be shown code that no longer exists, copy it
+    into its edit, and fail to match, attempt after attempt. This finds the
+    same rule's hit in the current scan, nearest the original line, and uses its
+    line and snippet. Reports keep the original finding.
+    """
+    same = [f for f in current if f.rule_id == finding.rule_id and f.file == finding.file]
+    if not same:
+        return finding
+    best = min(same, key=lambda f: abs(f.line - finding.line))
+    return dataclasses.replace(finding, line=best.line, end_line=best.end_line, snippet=best.snippet)
 
 
 PROTECTED_PREFIXES = (".github/",)
@@ -297,13 +315,13 @@ def run_pipeline(
             continue
 
         rule_file_key = (finding.rule_id, finding.file)
+        current = None
         if entries:
             # An earlier fix may already have removed this one too (e.g. two
             # rules flagging the same SQL string); don't spend LLM time on it.
             with timed(timings, "fix + rescan loop"):
-                still_there = count_same_rule_and_file(
-                    finding, scan(target_repo, cfg.semgrep_rulesets, cfg.engines)
-                )
+                current = scan(target_repo, cfg.semgrep_rulesets, cfg.engines)
+                still_there = count_same_rule_and_file(finding, current)
             if still_there < remaining[rule_file_key]:
                 remaining[rule_file_key] = still_there
                 record(triage_result, "resolved by an earlier fix")
@@ -318,8 +336,11 @@ def run_pipeline(
 
         with timed(timings, "fix + rescan loop"):
             note = history_note(finding_history(history, repo_full_name, finding))
+            target = with_all_rules(finding, findings)
+            if current is not None:
+                target = current_view(target, current)  # show the code as it is now
             fix_result = fix_finding(
-                with_all_rules(finding, findings), ollama, repo, model=cfg.fix_models[0],
+                target, ollama, repo, model=cfg.fix_models[0],
                 history=note,
             )
             validation_result = validate_and_retry(
@@ -338,6 +359,11 @@ def run_pipeline(
                     context=numbered_context(target_repo, f),
                 ),
             )
+        if validation_result.validated:
+            # Laya's read of the accepted change. Advisory: it never gates anything.
+            validation_result.trust = fix_trust(laya, finding, validation_result)
+            if validation_result.trust is not None:
+                print(f"    [fix trust] Laya {validation_result.trust:.2f}", file=sys.stderr, flush=True)
         entries.append((triage_result, validation_result))
         if validation_result.validated and validation_result.note:
             # The scanner still matches here, so the count doesn't drop.
