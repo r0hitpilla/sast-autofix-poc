@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 
 from models import Finding, TriageResult, ValidationResult
 from identity import distinct_locations, finding_fingerprint
+from policy import STRICT, Policy
 from risk import risk_score
 
 
@@ -33,6 +34,18 @@ class RunReport:
     # Run identity, provenance and outcome details, filled in by the
     # pipeline (cli.run_pipeline) — see SCHEMA_VERSION / to_json.
     meta: dict = field(default_factory=dict)
+    # The security policy in force and people's decisions (fingerprint ->
+    # decision). STRICT and no decisions: every confirmed finding blocks.
+    policy: Policy = STRICT
+    decisions: dict = field(default_factory=dict)
+
+    @property
+    def repository(self) -> str:
+        return (self.meta.get("run") or {}).get("repository", "")
+
+    def blocks(self, finding: Finding) -> bool:
+        decision = self.decisions.get(fingerprint(finding, self.repository))
+        return self.policy.blocks(finding.severity, decision)
 
     def count(self, predicate) -> int:
         return sum(1 for r in self.records if predicate(r))
@@ -47,9 +60,12 @@ class RunReport:
 
         Fixes live on the -fix branch, not the scanned one, so a finding the
         run fixed still blocks until that fix is merged and a rescan is clean.
-        Only findings Laya rejected as false positives don't block.
+        Findings Laya rejected as false positives don't block, nor do those
+        the security policy allows (or that a person decided, where the
+        policy lets a decision clear them).
         """
-        return [r for r in self.records if r.triage.route in ("fix", "review")]
+        return [r for r in self.records
+                if r.triage.route in ("fix", "review") and self.blocks(r.triage.finding)]
 
     @property
     def fixed(self) -> int:

@@ -151,3 +151,20 @@ export interface IntegrationsData {
   categories: { category: string; items: IntegrationItem[] }[];
   outbox_pending: number; secrets_ready: boolean;
 }
+
+export type GateAction = "block" | "review" | "allow";
+export interface PolicyContent {
+  severity_actions: Record<Severity, GateAction>; decisions_clear_blocks: boolean; autofix: boolean;
+  never_autofix: string[]; repositories: string[]; branches: string[];
+}
+export interface PolicyVersionRow {
+  version: number; content: PolicyContent; note: string; published_by: string; published_at: string | null;
+}
+export interface PolicyData {
+  name: string; active: PolicyVersionRow | null; default: PolicyContent; always_never_autofix: string[];
+  versions: PolicyVersionRow[]; repositories: string[];
+}
+export interface RuleRow {
+  rule_id: string; cwe: string; severity: Severity; pack: string; findings: number; last_seen: string | null;
+  gate_action: GateAction;
+}

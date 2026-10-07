@@ -16,8 +16,10 @@ import { Login } from "./pages/Login";
 import { Models } from "./pages/Models";
 import { NotFound } from "./pages/NotFound";
 import { Overview } from "./pages/Overview";
+import { Policies } from "./pages/Policies";
 import { PullRequestDetail, PullRequests } from "./pages/PullRequests";
 import { Reports } from "./pages/Reports";
+import { Rules } from "./pages/Rules";
 import { RunDetail } from "./pages/RunDetail";
 import { Runs } from "./pages/Runs";
 import { Users } from "./pages/Users";
@@ -58,6 +60,8 @@ export function App() {
       <Route path="/models" element={signedIn(<Models />)} />
       <Route path="/reports" element={signedIn(<Reports />)} />
       <Route path="/health" element={signedIn(<Health />)} />
+      <Route path="/policies" element={signedIn(<Policies />)} />
+      <Route path="/rules" element={signedIn(<Rules />)} />
       <Route path="/integrations" element={signedIn(<RequirePermission permission="integrations:read"><Integrations /></RequirePermission>)} />
       <Route path="/integrations/new" element={signedIn(<RequirePermission permission="integrations:manage"><IntegrationWizard /></RequirePermission>)} />
       <Route path="/users" element={signedIn(<RequirePermission permission="users:manage"><Users /></RequirePermission>)} />

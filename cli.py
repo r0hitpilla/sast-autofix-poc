@@ -26,7 +26,7 @@ from pr import (
 from provenance import provenance
 from report import FindingRecord, RunReport, write_report
 from risk import by_risk
-from history import fetch_history, finding_history, history_note
+from history import fetch_history, fetch_policy, finding_history, history_note
 from scanner import scan
 from triage import triage_finding
 from validator import count_same_rule_and_file, validate_and_retry
@@ -116,7 +116,8 @@ PROTECTED_PREFIXES = (".github/",)
 
 def fix_branch_residual(report: RunReport) -> list:
     """Findings the final rescan (on the fix branch) still reports, minus the
-    ones Laya rejected as false positives — those never block anything."""
+    ones Laya rejected as false positives — those never block anything — and
+    the ones the security policy doesn't block."""
     rejected = {
         (r.triage.finding.rule_id, r.triage.finding.file)
         for r in report.records
@@ -124,7 +125,8 @@ def fix_branch_residual(report: RunReport) -> list:
         # fixed code the scanner still matches, but triage judged safe
         or (r.validation is not None and r.validation.validated and r.validation.note)
     }
-    return [f for f in report.residual if (f.rule_id, f.file) not in rejected]
+    return [f for f in report.residual
+            if (f.rule_id, f.file) not in rejected and report.blocks(f)]
 
 
 def _pr_number(url: str | None) -> int | None:
@@ -198,6 +200,12 @@ def run_pipeline(
     ollama = OllamaClient(host=cfg.ollama_host, model=cfg.ollama_model)
     # What earlier runs found and tried for this repository (empty if no dashboard).
     history = fetch_history(cfg.dashboard_url, repo_full_name, cfg.dashboard_token)
+    # The published security policy decides what blocks and what may be fixed.
+    policy = fetch_policy(cfg.dashboard_url, repo_full_name, base_branch, cfg.dashboard_token)
+    report.policy = policy
+    report.decisions = {fp: rec["decision"] for fp, rec in history.items() if rec.get("decision")}
+    report.meta["provenance"]["policy_version"] = policy.version
+    print(f"Security policy: {'v' + str(policy.version) if policy.version else 'strict default'}")
     laya = LayaClient(model=cfg.laya_model)
 
     # Every finding ends up in exactly one of these buckets — a human reading
@@ -208,6 +216,7 @@ def run_pipeline(
         "fixed (scanner still flags; triage judged safe)": 0,
         "sent to review": 0,
         "sent to review (CI/workflow file, never auto-fixed)": 0,
+        "not fixed (policy: never autofix)": 0,
         "rejected (likely false positive)": 0,
         "confirmed (check only, not fixed)": 0,
         "skipped (file not found in target repo)": 0,
@@ -267,6 +276,9 @@ def run_pipeline(
         # would do the most damage — these always go to a human.
         if finding.file.startswith(PROTECTED_PREFIXES):
             record(triage_result, "sent to review (CI/workflow file, never auto-fixed)")
+            continue
+        if not policy.may_autofix(finding.file):
+            record(triage_result, "not fixed (policy: never autofix)")
             continue
 
         # Finding.file is repo-root-relative (scanner runs Semgrep with

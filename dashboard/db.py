@@ -142,6 +142,18 @@ class TrackedFinding(Base):
     issue_url: Mapped[str | None] = mapped_column(Text)
 
 
+class PolicyVersion(Base):
+    """One published version of the security policy. Never edited: publishing
+    a change adds a version; the newest one is in force."""
+    __tablename__ = "policy_versions"
+
+    version: Mapped[int] = mapped_column(Integer, primary_key=True)
+    content: Mapped[dict] = mapped_column(JSONType)            # see policy.from_dict
+    note: Mapped[str] = mapped_column(Text)
+    published_by: Mapped[str] = mapped_column(Text)
+    published_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class Integration(Base):
     """A connection to an outside system. Secrets are encrypted (integrations.py)."""
     __tablename__ = "integrations"

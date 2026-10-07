@@ -21,12 +21,15 @@ from pydantic import BaseModel, Field
 from sqlalchemy import delete, func, select, text
 from sqlalchemy.orm import Session
 
+import policy as policy_mod
+
 from . import integrations, queries
 from .auth import (COOKIE, MIN_PASSWORD_LENGTH, ROLE_LABELS, ROLES, SESSION_TTL, authorize,
                    burn_password_time, client_ip, hash_password, lockout_active, now,
                    permissions_for, record, revoke_user_sessions, start_session, token_hash,
                    verify_password)
-from .db import (AuditEvent, AuthSession, FindingRow, Integration, OutboxMessage, Run, TrackedFinding, User,
+from .db import (AuditEvent, AuthSession, FindingRow, Integration, OutboxMessage, PolicyVersion, Run,
+                 TrackedFinding, User,
                  make_sessionmaker)
 from .deps import get_session
 from .settings import Settings, get_settings
@@ -583,6 +586,101 @@ def create_issue(request: Request, fingerprint: str = Path(pattern=r"^[0-9a-f]{6
     record(session, "issue_created", actor=actor, target=fingerprint, detail={"issue": key}, ip=client_ip(request))
     session.commit()
     return {"issue_key": key, "issue_url": url}
+
+
+# ---- security policy and rules ---------------------------------------------
+
+POLICY_NAME = "Production Security Policy"
+
+
+class PolicyIn(BaseModel):
+    content: dict
+    note: str = Field(min_length=3, max_length=300)
+
+
+def _version_json(v: PolicyVersion) -> dict:
+    return {"version": v.version, "content": v.content, "note": v.note,
+            "published_by": v.published_by, "published_at": queries.iso(v.published_at)}
+
+
+@app.get("/api/policy")
+def get_policy(session: Session = Depends(get_session)):
+    versions = session.scalars(select(PolicyVersion).order_by(PolicyVersion.version.desc())).all()
+    active = versions[0] if versions else None
+    return {"name": POLICY_NAME,
+            "active": _version_json(active) if active else None,
+            # What applies while nothing is published: the pipeline's strict default.
+            "default": policy_mod.STRICT.to_dict(),
+            "always_never_autofix": list(policy_mod.ALWAYS_NEVER_AUTOFIX),
+            "versions": [_version_json(v) for v in versions],
+            "repositories": queries.repositories(session)}
+
+
+@app.post("/api/policy")
+def publish_policy(body: PolicyIn, request: Request, actor: User = Depends(authorize),
+                   session: Session = Depends(get_session)):
+    """Publish a new version. Versions are never edited; this one takes effect on the next run."""
+    try:
+        parsed = policy_mod.from_dict(body.content)
+    except policy_mod.PolicyError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    latest = session.scalar(select(func.max(PolicyVersion.version))) or 0
+    content = parsed.to_dict()
+    content.pop("version", None)
+    row = PolicyVersion(version=latest + 1, content=content, note=body.note.strip(),
+                        published_by=actor.email, published_at=now())
+    session.add(row)
+    record(session, "policy_published", actor=actor, target=f"{POLICY_NAME} v{row.version}",
+           detail={"note": row.note, "content": content}, ip=client_ip(request))
+    session.commit()
+    return _version_json(row)
+
+
+@app.get("/api/policy/active")
+def active_policy(repository: str = Query(..., max_length=200), branch: str = Query(..., max_length=200),
+                  session: Session = Depends(get_session)):
+    """For the pipeline: the policy in force for this repository and branch."""
+    latest = session.scalar(select(PolicyVersion).order_by(PolicyVersion.version.desc()).limit(1))
+    if latest is None:
+        return {"applies": False}
+    parsed = policy_mod.from_dict(latest.content, version=latest.version)
+    if not parsed.applies_to(repository, branch):
+        return {"applies": False, "version": latest.version}
+    return {"applies": True, "policy": parsed.to_dict()}
+
+
+@app.get("/api/rules")
+def rules(session: Session = Depends(get_session)):
+    """Every rule that has produced a finding, with what the policy does about it."""
+    latest = session.scalar(select(PolicyVersion).order_by(PolicyVersion.version.desc()).limit(1))
+    active = policy_mod.from_dict(latest.content, latest.version) if latest else policy_mod.STRICT
+    rows = session.execute(
+        select(FindingRow.rule_id, FindingRow.cwe, FindingRow.severity, func.count(FindingRow.id),
+               func.max(Run.started_at))
+        .join(Run, FindingRow.run_id == Run.id).where(Run.dry_run.is_(False))
+        .group_by(FindingRow.rule_id, FindingRow.cwe, FindingRow.severity)).all()
+    by_rule: dict[str, dict] = {}
+    for rule_id, cwe, severity, count, last in rows:
+        item = by_rule.setdefault(rule_id, {"rule_id": rule_id, "cwe": queries.cwe_id(cwe), "severity": severity,
+                                            "pack": _pack(rule_id), "findings": 0, "last_seen": None})
+        item["findings"] += count
+        if item["last_seen"] is None or queries.iso(last) > item["last_seen"]:
+            item["last_seen"], item["severity"] = queries.iso(last), severity
+    order = {s: i for i, s in enumerate(policy_mod.SEVERITIES)}
+    items = sorted(by_rule.values(), key=lambda r: (order.get(r["severity"], 9), r["rule_id"]))
+    for item in items:
+        item["gate_action"] = active.action_for(item["severity"])
+    return {"policy_version": active.version, "total": len(items), "items": items}
+
+
+def _pack(rule_id: str) -> str:
+    if rule_id.startswith("osv."):
+        return "osv-scanner (dependencies)"
+    if rule_id.startswith("gitleaks."):
+        return "gitleaks (secrets)"
+    if "." not in rule_id:
+        return "Custom (rules/)"
+    return "Semgrep registry"
 
 
 @app.get("/api/audit")

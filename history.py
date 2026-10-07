@@ -37,6 +37,29 @@ def fetch_history(base_url, repository: str, token=None, timeout: float = 2.0) -
     return {item["fingerprint"]: item for item in items}
 
 
+def fetch_policy(base_url, repository: str, branch: str, token=None, timeout: float = 2.0):
+    """The published policy for this repository and branch, or STRICT.
+
+    Fail closed: no dashboard, no applicable policy or a bad answer all mean
+    STRICT, which blocks on every confirmed finding as before policies.
+    """
+    from policy import STRICT, PolicyError, from_dict
+    if not isinstance(base_url, str) or not base_url:
+        return STRICT
+    query = urllib.parse.urlencode({"repository": repository, "branch": branch})
+    headers = {"Authorization": f"Bearer {token}"} if isinstance(token, str) and token else {}
+    request = urllib.request.Request(f"{base_url.rstrip('/')}/api/policy/active?{query}", headers=headers)
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as resp:
+            data = json.load(resp)
+        if not data.get("applies"):
+            return STRICT
+        return from_dict(data["policy"], version=data["policy"].get("version"))
+    except (OSError, ValueError, KeyError, PolicyError) as exc:
+        print(f"[policy] using the strict default: {exc}", file=sys.stderr)
+        return STRICT
+
+
 def finding_history(history: dict, repository: str, finding) -> dict | None:
     if not history:
         return None

@@ -145,3 +145,15 @@ describe("integrations", () => {
     expect(screen.getByRole("button", { name: "Coming later" })).toBeDisabled();
   });
 });
+
+describe("policies", () => {
+  it("explains the strict default and needs a note before publishing", async () => {
+    const strict = { severity_actions: { Critical: "block", High: "block", Medium: "block", Low: "block" },
+                     decisions_clear_blocks: false, autofix: true, never_autofix: [], repositories: ["*"], branches: ["*"] };
+    mockApi({ ...shellApi, "/policy": { name: "Production Security Policy", active: null, default: strict,
+                                         always_never_autofix: [".github/**"], versions: [], repositories: [] } });
+    at("/policies");
+    expect(await screen.findByText(/strict default applies/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Publish v1" })).toBeDisabled();
+  });
+});

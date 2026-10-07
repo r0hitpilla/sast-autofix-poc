@@ -24,8 +24,8 @@ from .settings import get_settings
 
 ROLES = {
     "admin": {"dashboard:read", "findings:act", "users:manage", "audit:read",
-              "integrations:read", "integrations:manage"},
-    "security_engineer": {"dashboard:read", "findings:act", "integrations:read"},
+              "integrations:read", "integrations:manage", "policy:manage"},
+    "security_engineer": {"dashboard:read", "findings:act", "integrations:read", "policy:manage"},
     "developer": {"dashboard:read"},
     "auditor": {"dashboard:read", "audit:read"},
 }
@@ -40,7 +40,7 @@ LOCKOUT_WINDOW = timedelta(minutes=15)
 
 PUBLIC_PATHS = {"/api/auth/login", "/api/livez"}
 # Read by the pipeline with its machine token; everything else needs a user.
-MACHINE_PATHS = {"/api/history"}
+MACHINE_PATHS = {"/api/history", "/api/policy/active"}
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 
 
@@ -146,6 +146,8 @@ def required_permission(path: str, method: str = "GET") -> str | None:
         return "users:manage"
     if path.startswith("/api/audit"):
         return "audit:read"
+    if path.startswith("/api/policy") and method not in SAFE_METHODS:
+        return "policy:manage"
     if path.startswith("/api/integrations"):
         return "integrations:read" if method in SAFE_METHODS else "integrations:manage"
     if method not in SAFE_METHODS and path.startswith("/api/findings/"):
