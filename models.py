@@ -74,6 +74,9 @@ class ValidationResult:
     review: str = ""
     # Laya's trust score for the accepted fix (see fix_trust.py); advisory only.
     trust: float | None = None
+    # The proof-of-fix record (see proof.py): status proven / refuted / unproven /
+    # not_applicable, with the exploit test that backs it.
+    proof: dict | None = None
 
 
 @dataclass

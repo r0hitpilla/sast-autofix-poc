@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import delete, select
 
-from .db import FindingRow, Run, make_sessionmaker
+from .db import FindingRow, LlmCall, Run, make_sessionmaker
 from .integrations import enqueue_for_run
 from .tracking import refresh
 
@@ -96,6 +96,26 @@ def run_from_report(report: dict) -> Run:
     return run
 
 
+def llm_calls_from_report(report: dict, run_id: str) -> list[LlmCall]:
+    """The run's AI calls from `llm_usage.calls` (absent in reports written
+    before usage tracking: then there are none)."""
+    rows = []
+    for c in ((report.get("llm_usage") or {}).get("calls") or []):
+        try:
+            rows.append(LlmCall(
+                run_id=run_id, at=_ts(c.get("at")) or datetime.now(timezone.utc),
+                purpose=str(c.get("purpose") or "other")[:48], model=str(c.get("model") or "?")[:160],
+                provider=str(c.get("provider") or "?")[:32],
+                prompt_tokens=c.get("prompt_tokens"), completion_tokens=c.get("completion_tokens"),
+                duration_ms=int(c.get("duration_ms") or 0), ok=bool(c.get("ok", True)),
+                truncated=bool(c.get("truncated", False)), ref=c.get("ref"),
+                error=(str(c["error"])[:500] if c.get("error") else None),
+            ))
+        except (TypeError, ValueError):
+            continue  # one malformed entry must not lose the run
+    return rows
+
+
 def ingest(report: dict, sessionmaker=None) -> Run:
     run = run_from_report(report)
     Session = sessionmaker or make_sessionmaker()
@@ -104,9 +124,11 @@ def ingest(report: dict, sessionmaker=None) -> Run:
         # since a re-ingest can drop a finding a previous ingest recorded.
         old = session.scalars(select(FindingRow.fingerprint).where(FindingRow.run_id == run.id)).all()
         session.execute(delete(FindingRow).where(FindingRow.run_id == run.id))
+        session.execute(delete(LlmCall).where(LlmCall.run_id == run.id))
         session.execute(delete(Run).where(Run.id == run.id))
         session.add(run)
         session.flush()
+        session.add_all(llm_calls_from_report(report, run.id))
         refresh(session, list(old) + [row.fingerprint for row in run.findings])
         # Notifications are queued here and sent by the dashboard service,
         # which holds the key to the integration secrets; CI doesn't.

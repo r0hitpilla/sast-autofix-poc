@@ -38,6 +38,9 @@ class RunReport:
     # decision). STRICT and no decisions: every confirmed finding blocks.
     policy: Policy = STRICT
     decisions: dict = field(default_factory=dict)
+    # The run's AI-call ledger (llm_usage.UsageLedger). It is read when the
+    # report is written, so calls made after creation are included.
+    usage: object | None = None
 
     @property
     def repository(self) -> str:
@@ -84,6 +87,19 @@ def _distinct(records) -> int:
     return distinct_locations((r.triage.finding.file, r.triage.finding.snippet) for r in records)
 
 
+def _usage_markdown(s: dict) -> list[str]:
+    secs = s["duration_ms"] / 1000
+    lines = ["## AI usage", "",
+             f"{s['calls']} call(s), {s['prompt_tokens']:,} prompt + {s['completion_tokens']:,} completion "
+             f"= **{s['total_tokens']:,} tokens**, {secs:.0f}s of model time"
+             + (f", {s['errors']} failed" if s["errors"] else "") + ".", "",
+             "| Purpose | Calls | Prompt tokens | Completion tokens | Time |", "|---|---|---|---|---|"]
+    for purpose, b in sorted(s["by_purpose"].items(), key=lambda kv: -kv[1]["total_tokens"]):
+        lines.append(f"| {purpose} | {b['calls']} | {b['prompt_tokens']:,} | {b['completion_tokens']:,} "
+                     f"| {b['duration_ms'] / 1000:.0f}s |")
+    return lines + [""]
+
+
 def to_markdown(report: RunReport) -> str:
     total = len(report.records)
     review = report.count(lambda r: r.triage.route == "review")
@@ -105,6 +121,8 @@ def to_markdown(report: RunReport) -> str:
     ]
     if report.pr_urls:
         lines += ["**Pull requests:** " + ", ".join(report.pr_urls), ""]
+    if report.usage is not None and report.usage.calls():
+        lines += _usage_markdown(report.usage.summary())
     if report.blocking:
         lines += [
             f"**Merge gate: ❌ {len(report.blocking)} confirmed or unreviewed finding(s) "
@@ -121,17 +139,18 @@ def to_markdown(report: RunReport) -> str:
     lines += [
         "## Findings",
         "",
-        "| Location | CWE | Laya score | Laya asked the LLM about | Verdict | Outcome | Fix attempts | Fix trust |",
-        "|---|---|---|---|---|---|---|---|",
+        "| Location | CWE | Laya score | Laya asked the LLM about | Verdict | Outcome | Fix attempts | Fix trust | Proof |",
+        "|---|---|---|---|---|---|---|---|---|",
     ]
     for r in report.records:
         f = r.triage.finding
         asked = ", ".join(_short_question(q) for q, _ in r.triage.evidence[1:]) or "—"
         attempts = r.validation.attempts if r.validation else "—"
         trust = f"{r.validation.trust:.2f}" if r.validation and r.validation.trust is not None else "—"
+        proof = ((r.validation.proof or {}).get("status") or "—") if r.validation else "—"
         lines.append(
             f"| `{f.file}:{f.line}` | {f.cwe} | {r.triage.laya_score:.2f} | {asked} "
-            f"| {r.triage.route} | {r.outcome} | {attempts} | {trust} |"
+            f"| {r.triage.route} | {r.outcome} | {attempts} | {trust} | {proof.replace('_', ' ')} |"
         )
 
     if report.residual:
@@ -181,6 +200,7 @@ def _record_json(r: FindingRecord, repository: str = "") -> dict:
             "validated": v.validated,
             "trust": v.trust,
             "review": v.review or None,
+            "proof": v.proof,
             "scanner_clean": v.clean,
             "attempts": v.attempts,
             "failure": v.failure or None,
@@ -205,11 +225,13 @@ def to_json(report: RunReport) -> str:
             "confirmed": report.confirmed,
             "confirmed_distinct": _distinct(r for r in report.records if r.triage.route == "fix"),
             "fixed": report.fixed,
+            "proven": report.count(lambda r: r.validation is not None and (r.validation.proof or {}).get("status") == "proven"),
             "review": report.count(lambda r: r.triage.route == "review"),
             "rejected": report.count(lambda r: r.triage.route == "reject"),
             "blocking": len(report.blocking),
             "residual": len(report.residual),
         },
+        "llm_usage": report.usage.report() if report.usage is not None else None,
         "findings": [_record_json(r, repository) for r in report.records],
         "residual": [dataclasses.asdict(f) for f in report.residual],
         "timings": report.timings,

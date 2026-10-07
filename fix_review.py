@@ -12,6 +12,7 @@ import re
 import sys
 
 from injection import FENCE_RULE, fence
+from llm_usage import tag
 from models import Finding
 
 REVIEW_RE = re.compile(r"^[\s*_`#>-]*REVIEW[\s*_`]*:[\s*_`]*(APPROVE|REJECT)\b[\s*_`:—–-]*(.*)$",
@@ -67,7 +68,8 @@ def review_fix(ollama, finding: Finding, diff: str, dependencies: str = "") -> t
     if not diff:
         return True, "no diff to review"
     try:
-        answer = ollama.generate(build_review_prompt(finding, diff, dependencies))
+        with tag(purpose="review", ref=f"{finding.file}:{finding.line}"):
+            answer = ollama.generate(build_review_prompt(finding, diff, dependencies))
     except Exception as exc:
         print(f"[fix review warning: reviewer call failed: {exc}]", file=sys.stderr)
         return True, "automated review unavailable"

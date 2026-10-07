@@ -1,8 +1,13 @@
 semgrep>=1.78.0
-ollama>=0.3.0
+ollama>=0.6.1
 laya>=0.3.0
 GitPython>=3.1.0
 PyGithub>=2.3.0
 PyYAML>=6.0
 pytest>=8.0.0
 pyflakes>=3.2.0
+langchain-core>=1.2.21,<2
+langchain-ollama>=1.1,<2
+opentelemetry-sdk>=1.25
+opentelemetry-exporter-otlp-proto-http>=1.25
+httpx>=0.27

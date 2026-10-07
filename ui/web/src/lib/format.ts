@@ -37,3 +37,11 @@ export function delta(now: number, prev: number, lowerIsBetter = true): { text: 
   const good = lowerIsBetter ? !up : up;
   return { text: `${up ? "↑" : "↓"} ${Math.abs(d)} vs previous`, tone: good ? "down-good" : "up-bad" };
 }
+
+/** 1_234 -> "1.2k", 3_400_000 -> "3.4M": token counts are read, not computed with. */
+export function compact(n: number | null | undefined): string {
+  if (n === null || n === undefined) return "—";
+  if (n < 1000) return String(n);
+  if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`;
+  return `${(n / 1_000_000).toFixed(1)}M`;
+}

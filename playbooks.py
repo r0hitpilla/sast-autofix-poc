@@ -62,7 +62,9 @@ COMMAND_INJECTION = (
     "its arguments as a list, e.g. subprocess.run([\"tar\", \"-czf\", archive, \"-C\", "
     "directory, \".\"], check=True). A value from the request that becomes part of a "
     "file name or argument must be validated first: allow only letters, digits, "
-    "\"-\" and \"_\" (re.fullmatch) and call abort(400) otherwise."
+    "\"-\" and \"_\" (re.fullmatch) and call abort(400) otherwise. Every name you use must be imported: "
+    "add `abort` to the file's existing flask import and `import re` with the other imports, each as its "
+    "own edit block at the top of the file."
 )
 
 UNSAFE_YAML = (

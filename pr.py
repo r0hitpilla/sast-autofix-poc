@@ -141,6 +141,23 @@ def trust_line(validation) -> str:
             "_(Laya's read of the change itself. Advisory: the checks below decide.)_\n\n")
 
 
+def proof_line(validation) -> str:
+    """Whether an exploit test backs this fix, and what it showed."""
+    proof = getattr(validation, "proof", None) or {}
+    status = proof.get("status")
+    if status == "proven":
+        return (f"**Proof of fix:** ✅ the attack in `{proof['test']}` worked on the original code and no longer "
+                "works with this fix. It is included in this PR as a regression test. It shows this attack is "
+                "blocked, not that every variant is.\n\n")
+    if status == "refuted":
+        return ("**Proof of fix:** ❌ **the attack still works with this fix** (its exploit test still "
+                "fails). Review this fix with extra care.\n\n"
+                f"<details><summary>Exploit test output</summary>\n\n```\n{proof.get('fixed_output', '')}\n```\n\n</details>\n\n")
+    if status == "unproven":
+        return f"**Proof of fix:** not shown. {proof.get('reason', '')} The checks below still apply.\n\n"
+    return ""
+
+
 def trust_inline(validation) -> str:
     trust = getattr(validation, "trust", None)
     return "" if trust is None else f"fix trust {trust:.2f} · "
@@ -217,6 +234,7 @@ def build_pr_body(
             f"**Laya confidence:** {triage.laya_score:.2f} "
             f"(after {follow_ups} follow-up question(s) to the LLM)\n\n"
             f"{trust_line(validation)}"
+            f"{proof_line(validation)}"
             "<details><summary>Triage reasoning</summary>\n\n"
             f"{triage.llm_reasoning}\n\n</details>\n\n"
             f"**Validated:** {_validation_note(validation)} "
@@ -260,6 +278,13 @@ def build_line_comments(
             body = (
                 "⚠️ **sast-autofix:** this change is not tied to any "
                 "finding. Review it with extra care."
+            )
+        elif (validation.proof or {}).get("test") == hunk.file:
+            finding = triage.finding
+            body = (
+                "🧪 **sast-autofix:** regression test for this fix. It attacks the code the way the "
+                f"**{finding.cwe}** finding describes and asserts the attack no longer works. "
+                "It failed on the original code and passes with the fix."
             )
         else:
             finding = triage.finding

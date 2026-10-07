@@ -137,3 +137,8 @@ def test_pickle_deserialization_has_no_yaml_advice():
 
 def test_the_secret_playbook_keeps_import_working():
     assert "inside the function that uses it" in HARD_CODED_SECRET
+
+
+def test_the_command_injection_playbook_says_to_import_what_it_tells_the_model_to_call():
+    from playbooks import COMMAND_INJECTION
+    assert "abort(400)" in COMMAND_INJECTION and "add `abort`" in COMMAND_INJECTION and "import re" in COMMAND_INJECTION

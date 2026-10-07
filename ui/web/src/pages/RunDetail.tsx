@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import type { Provenance, RunDetail as RunDetailData } from "../api/types";
 import { useApi } from "../api/useApi";
+import { RunAiUsage } from "../components/AiUsage";
 import { DiffView } from "../components/code";
 import { Shell } from "../components/Shell";
 import { AiTag, Async, B, Card, DataTable, Empty, FixStatusPill, M, N, PageHead, Pill, RunStatusPill, SeverityPill } from "../components/ui";
@@ -111,6 +112,7 @@ export function RunDetail() {
                 </Card>
                 <Card title="Provenance"><ProvenanceList p={r.provenance} runId={r.id} commit={r.commit} /></Card>
               </div>
+              {r.usage && <RunAiUsage usage={r.usage} />}
               <Card title={`Findings (${r.findings.length})`} flush>
                 <DataTable rowKey={(f) => f.id} rows={r.findings} to={(f) => `/findings/${f.id}${link}`}
                   columns={[

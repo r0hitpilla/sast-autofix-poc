@@ -25,6 +25,17 @@ class Config:
     dashboard_url: str | None = None
     # The dashboard's machine token; the history is refused without it.
     dashboard_token: str | None = None
+    # Tracing of every AI call to a self-hosted Langfuse (see observability.py).
+    # The API keys are not configuration: they come from the environment or a
+    # private file, never from this repository.
+    # Exploit test per fix (see proof.py): off | advisory | required.
+    proof_mode: str = "advisory"
+    proof_attempts: int = 3
+    proof_timeout: int = 60
+    langfuse_enabled: bool = False
+    langfuse_host: str = "http://127.0.0.1:3000"
+    langfuse_allow_cloud: bool = False      # prompts contain source code: keep this off
+    langfuse_capture_content: bool = True   # False: send token/timing metadata only
 
 
 def resolve_ruleset(ruleset: str, config_dir: str) -> str:
@@ -37,6 +48,11 @@ def resolve_ruleset(ruleset: str, config_dir: str) -> str:
 def load_config(path: str = "config.yaml") -> Config:
     with open(path) as f:
         raw = yaml.safe_load(f)
+
+    langfuse = (raw.get("observability") or {}).get("langfuse") or {}
+    proof = raw.get("proof_of_fix") or {}
+    if proof.get("mode", "advisory") not in ("off", "advisory", "required"):
+        raise ValueError("proof_of_fix.mode must be off, advisory or required")
 
     return Config(
         ollama_host=os.environ.get("OLLAMA_HOST", raw["ollama"]["host"]),
@@ -55,4 +71,11 @@ def load_config(path: str = "config.yaml") -> Config:
         engines=tuple(raw.get("engines", ["semgrep"])),
         dashboard_url=os.environ.get("SAST_DASHBOARD_URL", raw.get("dashboard_url")) or None,
         dashboard_token=os.environ.get("SAST_DASHBOARD_TOKEN") or None,
+        proof_mode=proof.get("mode", "advisory"),
+        proof_attempts=int(proof.get("attempts", 3)),
+        proof_timeout=int(proof.get("timeout_seconds", 60)),
+        langfuse_enabled=bool(langfuse.get("enabled", False)),
+        langfuse_host=langfuse.get("host", "http://127.0.0.1:3000"),
+        langfuse_allow_cloud=bool(langfuse.get("allow_cloud", False)),
+        langfuse_capture_content=bool(langfuse.get("capture_content", True)),
     )
