@@ -11,6 +11,7 @@ import { Audit } from "./pages/Audit";
 import { FindingDetail } from "./pages/FindingDetail";
 import { Findings } from "./pages/Findings";
 import { Health } from "./pages/Health";
+import { IntegrationWizard, Integrations } from "./pages/Integrations";
 import { Login } from "./pages/Login";
 import { Models } from "./pages/Models";
 import { NotFound } from "./pages/NotFound";
@@ -57,6 +58,8 @@ export function App() {
       <Route path="/models" element={signedIn(<Models />)} />
       <Route path="/reports" element={signedIn(<Reports />)} />
       <Route path="/health" element={signedIn(<Health />)} />
+      <Route path="/integrations" element={signedIn(<RequirePermission permission="integrations:read"><Integrations /></RequirePermission>)} />
+      <Route path="/integrations/new" element={signedIn(<RequirePermission permission="integrations:manage"><IntegrationWizard /></RequirePermission>)} />
       <Route path="/users" element={signedIn(<RequirePermission permission="users:manage"><Users /></RequirePermission>)} />
       <Route path="/audit" element={signedIn(<RequirePermission permission="audit:read"><Audit /></RequirePermission>)} />
       <Route path="*" element={signedIn(<NotFound />)} />

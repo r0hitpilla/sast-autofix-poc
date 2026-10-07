@@ -26,7 +26,7 @@ async function parse<T>(resp: Response): Promise<T> {
 }
 
 /** Send a JSON body (POST, PATCH). The server refuses any other content type for changes. */
-export async function sendJson<T>(method: "POST" | "PATCH", path: string, body: unknown): Promise<T> {
+export async function sendJson<T>(method: "POST" | "PATCH" | "DELETE", path: string, body: unknown): Promise<T> {
   const resp = await fetch(`/api${path}`, {
     method, credentials: "same-origin",
     headers: { Accept: "application/json", "Content-Type": "application/json" },

@@ -12,6 +12,10 @@ class Settings:
     # Optional. Bearer token the pipeline uses to read finding history without a
     # user session. Unset: machine access is off and only signed-in users can read.
     history_token: str | None = field(default_factory=lambda: os.environ.get("SAST_HISTORY_TOKEN") or None)
+    # Fernet key that encrypts integration secrets. Unset: integrations can't be saved.
+    secret_key: str | None = field(default_factory=lambda: os.environ.get("SAST_SECRET_KEY") or None)
+    # Base URL people reach the dashboard on, for links in notifications.
+    public_url: str = field(default_factory=lambda: os.environ.get("SAST_PUBLIC_URL", "http://127.0.0.1:8710"))
     # Optional. Read-only GitHub token for live PR state; without it the
     # dashboard shows PR data as recorded by the pipeline.
     github_token: str | None = field(default_factory=lambda: os.environ.get("GITHUB_TOKEN") or None)

@@ -6,32 +6,62 @@ Phase 1 is read-only and has no sign-in, so it must only listen on
     dashboard/.venv/bin/uvicorn dashboard.api:app --host 127.0.0.1 --port 8710
 """
 
+import asyncio
 import csv
 import io
 import os
 import re
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Request
+import httpx
+from fastapi import Depends, FastAPI, HTTPException, Path, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, func, select, text
 from sqlalchemy.orm import Session
 
-from . import queries
+from . import integrations, queries
 from .auth import (COOKIE, MIN_PASSWORD_LENGTH, ROLE_LABELS, ROLES, SESSION_TTL, authorize,
                    burn_password_time, client_ip, hash_password, lockout_active, now,
                    permissions_for, record, revoke_user_sessions, start_session, token_hash,
                    verify_password)
-from .db import AuditEvent, AuthSession, User
+from .db import (AuditEvent, AuthSession, FindingRow, Integration, OutboxMessage, Run, TrackedFinding, User,
+                 make_sessionmaker)
 from .deps import get_session
 from .settings import Settings, get_settings
 from .sources import github, ollama, system
 
 VERSION = "1.1.0"
 
+DELIVERY_INTERVAL = 15  # seconds between outbox sweeps
+
+
+def _deliver_once() -> None:
+    try:
+        with make_sessionmaker()() as session:
+            integrations.deliver_pending(session)
+    except Exception as exc:  # a delivery problem must never stop the dashboard
+        print(f"[outbox] delivery sweep failed: {exc}", flush=True)
+
+
+@asynccontextmanager
+async def lifespan(_app):
+    """Deliver queued notifications in the background while the service runs."""
+    task = None
+    if os.environ.get("SAST_DELIVERY", "on") != "off":
+        async def loop():
+            while True:
+                await asyncio.to_thread(_deliver_once)
+                await asyncio.sleep(DELIVERY_INTERVAL)
+        task = asyncio.create_task(loop())
+    yield
+    if task:
+        task.cancel()
+
+
 app = FastAPI(title="SAST Autofix dashboard", version=VERSION, docs_url="/api/docs",
-              openapi_url="/api/openapi.json", redoc_url=None,
+              openapi_url="/api/openapi.json", redoc_url=None, lifespan=lifespan,
               # Every request passes the sign-in and role check; see auth.py.
               dependencies=[Depends(authorize)])
 
@@ -349,6 +379,210 @@ def update_user(user_id: int, body: UserPatch, request: Request, actor: User = D
     record(session, "user_updated", actor=actor, target=user.email, detail=changes, ip=client_ip(request))
     session.commit()
     return _user_json(user)
+
+
+class DecisionIn(BaseModel):
+    decision: str = Field(max_length=16)          # false_positive | suppressed | open (reopen)
+    reason: str = Field(default="", max_length=500)
+
+
+DECISIONS = {"false_positive", "suppressed", "open"}
+
+
+@app.post("/api/findings/{fingerprint}/decision")
+def decide(body: DecisionIn, request: Request, fingerprint: str = Path(pattern=r"^[0-9a-f]{64}$"),
+           actor: User = Depends(authorize), session: Session = Depends(get_session)):
+    """Record a person's decision about a finding. Every decision is audited
+    with its reason; reopening keeps the history in the audit log."""
+    tracked = session.get(TrackedFinding, fingerprint)
+    if tracked is None:
+        raise HTTPException(404, "no such finding")
+    if body.decision not in DECISIONS:
+        raise HTTPException(422, f"decision must be one of: {', '.join(sorted(DECISIONS))}")
+    reason = body.reason.strip()
+    reopening = body.decision == "open"
+    if not reopening and len(reason) < 3:
+        raise HTTPException(422, "say why, in a few words, so the audit log makes sense")
+    before = tracked.decision
+    tracked.decision = None if reopening else body.decision
+    tracked.decision_reason = None if reopening else reason
+    tracked.decided_by = None if reopening else actor.email
+    tracked.decided_at = None if reopening else now()
+    record(session, "finding_decision", actor=actor,
+           target=f"{tracked.repository} {tracked.rule_id} {tracked.file}",
+           detail={"from": before, "to": tracked.decision, "reason": reason}, ip=client_ip(request))
+    session.commit()
+    return {"decision": tracked.decision, "decision_reason": tracked.decision_reason,
+            "decided_by": tracked.decided_by, "decided_at": queries.iso(tracked.decided_at)}
+
+
+# ---- integrations ----------------------------------------------------------
+
+class IntegrationIn(BaseModel):
+    provider: str = Field(max_length=32)
+    values: dict[str, str] = Field(default_factory=dict)
+    events: list[str] = Field(default_factory=list)
+
+
+class IntegrationPatch(BaseModel):
+    enabled: bool
+
+
+def _builtin_meta(session: Session, key: str) -> tuple[str, str]:
+    if key == "github_actions":
+        runs = session.scalars(select(Run).where(Run.dry_run.is_(False), Run.url.like("%/actions/runs/%"))
+                               .order_by(Run.started_at.desc())).all()
+        if not runs:
+            return "untested", "No runs recorded from GitHub Actions yet"
+        return "connected", f"Runs recorded {len(runs)}\nLast run {queries.iso(runs[0].started_at)[:16].replace('T', ' ')}"
+    if key == "dependency_scanners":
+        n = session.scalar(select(func.count(FindingRow.id)).where(
+            FindingRow.rule_id.like("osv.%") | FindingRow.rule_id.like("gitleaks.%"))) or 0
+        return "connected", f"osv-scanner and gitleaks, in the pipeline\nFindings recorded {n}"
+    return "untested", ""
+
+
+def _integration_json(spec: dict, row: Integration | None, session: Session) -> dict:
+    out = {"key": spec["key"], "name": spec["name"], "available": spec.get("available", False),
+           "builtin": spec.get("builtin", False), "auth": spec.get("auth"),
+           "permissions": spec.get("permissions", []),
+           "fields": [{"key": k, "label": l, "secret": s, "required": r} for k, l, s, r in spec.get("fields", [])],
+           "events": [{"key": e, "label": integrations.EVENTS[e]} for e in spec.get("events", [])]}
+    if spec.get("builtin"):
+        status, meta = _builtin_meta(session, spec["key"])
+        return {**out, "status": status, "meta": meta, "configured": True}
+    if row is None:
+        return {**out, "status": "not_configured" if spec.get("available") else "unavailable",
+                "meta": "" if spec.get("available") else "Connector not available yet", "configured": False}
+    try:
+        secrets = integrations.decrypt(row.secret_enc)
+    except integrations.IntegrationError:
+        secrets = {}
+    return {**out, "configured": True, "id": row.id, "enabled": row.enabled,
+            "status": row.status if row.enabled else "disabled",
+            "config": row.config, "secrets_set": sorted(k for k, v in secrets.items() if v),
+            "subscribed": row.events, "last_test_at": queries.iso(row.last_test_at),
+            "last_test_detail": row.last_test_detail, "last_event_at": queries.iso(row.last_event_at),
+            "last_error": row.last_error,
+            "meta": (f"Last event {queries.iso(row.last_event_at)[:16].replace('T', ' ')}" if row.last_event_at
+                     else "No events delivered yet")}
+
+
+@app.get("/api/integrations")
+def list_integrations(session: Session = Depends(get_session)):
+    rows = {r.provider: r for r in session.scalars(select(Integration)).all()}
+    pending = session.scalar(select(func.count(OutboxMessage.id)).where(OutboxMessage.delivered_at.is_(None))) or 0
+    return {"categories": [{"category": cat, "items": [_integration_json(spec, rows.get(spec["key"]), session)
+                                                      for spec in items]}
+                           for cat, items in integrations.CATALOGUE],
+            "events": integrations.EVENTS, "outbox_pending": pending,
+            "secrets_ready": bool(get_settings().secret_key)}
+
+
+def _settings_for(body: IntegrationIn, session: Session) -> tuple[Integration | None, dict, dict, list]:
+    existing = session.scalar(select(Integration).where(Integration.provider == body.provider))
+    try:
+        old_secrets = integrations.decrypt(existing.secret_enc) if existing else {}
+        config, secrets = integrations.split_settings(body.provider, body.values, old_secrets)
+        events = integrations.valid_events(body.provider, body.events)
+    except integrations.IntegrationError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return existing, config, secrets, events
+
+
+@app.post("/api/integrations/test")
+def test_integration(body: IntegrationIn, request: Request, actor: User = Depends(authorize),
+                     session: Session = Depends(get_session)):
+    """The wizard's "Test connection" step: test the values as entered, before saving."""
+    existing, config, secrets, _ = _settings_for(body, session)
+    results = integrations.test_connection(body.provider, config, secrets)
+    ok = all(r["ok"] for r in results)
+    if existing is not None:
+        existing.status = "connected" if ok else "failing"
+        existing.last_test_at, existing.last_test_detail = now(), results
+    record(session, "integration_tested", "success" if ok else "failure", actor=actor,
+           target=body.provider, detail={"checks": results}, ip=client_ip(request))
+    session.commit()
+    return {"ok": ok, "results": results}
+
+
+@app.post("/api/integrations")
+def save_integration(body: IntegrationIn, request: Request, actor: User = Depends(authorize),
+                     session: Session = Depends(get_session)):
+    """Create or update a provider's connection, then test it so the status is real."""
+    existing, config, secrets, events = _settings_for(body, session)
+    try:
+        secret_enc = integrations.encrypt(secrets)
+    except integrations.IntegrationError as exc:
+        raise HTTPException(503, str(exc)) from exc
+    results = integrations.test_connection(body.provider, config, secrets)
+    ok = all(r["ok"] for r in results)
+    row = existing or Integration(provider=body.provider, created_by=actor.email, created_at=now(), enabled=True)
+    row.config, row.secret_enc, row.events = config, secret_enc, events
+    row.status, row.last_test_at, row.last_test_detail = ("connected" if ok else "failing"), now(), results
+    row.updated_at = now()
+    session.add(row)
+    record(session, "integration_updated" if existing else "integration_created", actor=actor,
+           target=body.provider, detail={"events": events, "settings": sorted(config), "secrets": sorted(secrets),
+                                         "test_ok": ok}, ip=client_ip(request))
+    session.commit()
+    spec = integrations.PROVIDERS[body.provider]
+    return _integration_json(spec, row, session)
+
+
+@app.patch("/api/integrations/{provider}")
+def toggle_integration(provider: str, body: IntegrationPatch, request: Request, actor: User = Depends(authorize),
+                       session: Session = Depends(get_session)):
+    row = session.scalar(select(Integration).where(Integration.provider == provider))
+    if row is None:
+        raise HTTPException(404, "not configured")
+    row.enabled, row.updated_at = body.enabled, now()
+    record(session, "integration_enabled" if body.enabled else "integration_disabled", actor=actor,
+           target=provider, ip=client_ip(request))
+    session.commit()
+    return _integration_json(integrations.PROVIDERS[provider], row, session)
+
+
+@app.delete("/api/integrations/{provider}")
+def delete_integration(provider: str, request: Request, actor: User = Depends(authorize),
+                       session: Session = Depends(get_session)):
+    row = session.scalar(select(Integration).where(Integration.provider == provider))
+    if row is None:
+        raise HTTPException(404, "not configured")
+    session.delete(row)
+    record(session, "integration_deleted", actor=actor, target=provider, ip=client_ip(request))
+    session.commit()
+    return {"ok": True}
+
+
+@app.post("/api/findings/{fingerprint}/issue")
+def create_issue(request: Request, fingerprint: str = Path(pattern=r"^[0-9a-f]{64}$"),
+                 actor: User = Depends(authorize), session: Session = Depends(get_session)):
+    """Open a Jira issue for a finding (once; later calls return the same issue)."""
+    tracked = session.get(TrackedFinding, fingerprint)
+    if tracked is None:
+        raise HTTPException(404, "no such finding")
+    if tracked.issue_key:
+        return {"issue_key": tracked.issue_key, "issue_url": tracked.issue_url}
+    jira = session.scalar(select(Integration).where(Integration.provider == "jira", Integration.enabled.is_(True)))
+    if jira is None:
+        raise HTTPException(409, "Jira is not connected. An admin can connect it under Integrations.")
+    link = f"{get_settings().public_url.rstrip('/')}/findings"
+    summary = f"[SAST] {queries.cwe_title(tracked.cwe)} in {tracked.file} ({tracked.repository})"
+    description = (f"Rule: {tracked.rule_id}\nCWE: {tracked.cwe}\nSeverity: {tracked.severity}\n"
+                   f"File: {tracked.file}\nSeen in {tracked.occurrences} run(s), last {queries.iso(tracked.last_seen)}\n"
+                   f"Status: {tracked.disposition}\nDashboard: {link}")
+    try:
+        key, url = integrations.create_jira_issue(jira, summary, description)
+    except (integrations.IntegrationError, httpx.HTTPError) as exc:
+        record(session, "issue_create_failed", "failure", actor=actor, target=fingerprint,
+               detail={"error": str(exc)}, ip=client_ip(request))
+        session.commit()
+        raise HTTPException(502, f"Jira: {exc}") from exc
+    tracked.issue_key, tracked.issue_url = key, url
+    record(session, "issue_created", actor=actor, target=fingerprint, detail={"issue": key}, ip=client_ip(request))
+    session.commit()
+    return {"issue_key": key, "issue_url": url}
 
 
 @app.get("/api/audit")

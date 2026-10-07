@@ -23,8 +23,9 @@ from .deps import get_session
 from .settings import get_settings
 
 ROLES = {
-    "admin": {"dashboard:read", "users:manage", "audit:read"},
-    "security_engineer": {"dashboard:read"},
+    "admin": {"dashboard:read", "findings:act", "users:manage", "audit:read",
+              "integrations:read", "integrations:manage"},
+    "security_engineer": {"dashboard:read", "findings:act", "integrations:read"},
     "developer": {"dashboard:read"},
     "auditor": {"dashboard:read", "audit:read"},
 }
@@ -139,12 +140,16 @@ def permissions_for(role: str) -> set[str]:
     return ROLES.get(role, set())
 
 
-def required_permission(path: str) -> str | None:
+def required_permission(path: str, method: str = "GET") -> str | None:
     """The permission a /api/ path needs, or None when signing in is enough."""
     if path.startswith("/api/users"):
         return "users:manage"
     if path.startswith("/api/audit"):
         return "audit:read"
+    if path.startswith("/api/integrations"):
+        return "integrations:read" if method in SAFE_METHODS else "integrations:manage"
+    if method not in SAFE_METHODS and path.startswith("/api/findings/"):
+        return "findings:act"
     return "dashboard:read"
 
 
@@ -178,7 +183,7 @@ def authorize(request: Request, session: Session = Depends(get_session)):
     user = current_user(request, session)
     if user is None:
         raise HTTPException(401, "sign in required")
-    needed = required_permission(path)
+    needed = required_permission(path, request.method)
     if needed and needed not in permissions_for(user.role):
         record(session, "access_denied", "denied", actor=user, target=f"{request.method} {path}",
                detail={"needs": needed}, ip=client_ip(request))

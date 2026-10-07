@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import type { FindingDetail as FindingData } from "../api/types";
 import { useApi } from "../api/useApi";
 import { CodeView, DiffView } from "../components/code";
+import { Decision } from "../components/Decision";
 import { Shell } from "../components/Shell";
 import { AiTag, Async, Card, Empty, FixStatusPill, PageHead, Pill, SeverityPill } from "../components/ui";
 import { carry, useFilters } from "../lib/filters";
@@ -65,6 +66,7 @@ export function FindingDetail() {
                       )}
                     </Card>
                   )}
+                  <Decision finding={f} onChange={state.reload} />
                   <Card title="Context">
                     <div className="kv">
                       {([["Repository", f.repository], ["Branch", f.branch], ["File", `${f.file}:${f.line}${f.end_line && f.end_line !== f.line ? `–${f.end_line}` : ""}`],

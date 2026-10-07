@@ -54,6 +54,13 @@ def history_note(record: dict | None) -> str:
     if record.get("llm_label"):
         verdict = "TRUE POSITIVE" if record["llm_label"] == "tp" else "FALSE POSITIVE"
         lines.append(f"The earlier investigation concluded {verdict} (Laya {record['laya_score']:.2f}).")
+    if record.get("decision"):
+        label = "a false positive" if record["decision"] == "false_positive" else "suppressed"
+        lines.append(
+            f"A person marked this {label} earlier ({record.get('decided_by') or 'unknown'}): "
+            f"{record.get('decision_reason') or 'no reason given'}. Weigh that as context; "
+            "it is not proof."
+        )
     if record.get("fix_attempts"):
         if record.get("fix_validated"):
             lines.append("An earlier fix passed every check.")

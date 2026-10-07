@@ -215,3 +215,22 @@ a:hover { text-decoration: underline; }
 .user-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .user-form .input { width: auto; flex: 1 1 180px; }
 .field { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--mute); }
+.decision-reason { width: 100%; height: auto; padding: 8px 10px; font-family: var(--sans); resize: vertical; }
+
+/* ---- integrations (matches the design) ---- */
+.integ-cat { font-family: var(--mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--mute); margin-bottom: 10px; }
+.integ-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+.integ-card { padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
+.integ-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 14px; }
+.integ-meta { font-family: var(--mono); font-size: 12px; color: var(--mute); line-height: 1.6; min-height: 38px; white-space: pre-line; overflow-wrap: anywhere; }
+.wiz-steps { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+.wiz-step { padding: 4px 10px; border-radius: 999px; font-size: 12px; border: 1px solid var(--line); background: var(--card); color: var(--mute); }
+.wiz-step.now { background: var(--ink); color: var(--bg); }
+.wiz-step.done { background: var(--greenbg); color: var(--green); }
+.wiz-card { max-width: 720px; }
+.wiz-card > * + * { margin-top: 14px; }
+.wiz-title { font-size: 16px; font-weight: 600; }
+.wiz-list { display: flex; flex-direction: column; gap: 8px; }
+.wiz-item { display: flex; gap: 10px; align-items: center; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; flex-wrap: wrap; }
+.wiz-input { width: 100%; height: 36px; font-size: 13px; }
+.wiz-nav { display: flex; gap: 8px; justify-content: space-between; }

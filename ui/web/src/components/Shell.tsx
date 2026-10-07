@@ -13,6 +13,7 @@ const NAV = [
   { to: "/findings", label: "Findings", badge: "findings" },
   { to: "/runs", label: "Autofix Runs" },
   { to: "/pulls", label: "Pull Requests", badge: "prs" },
+  { to: "/integrations", label: "Integrations", perm: "integrations:read" },
   { to: "/models", label: "Models" },
   { to: "/reports", label: "Reports" },
   { to: "/health", label: "System Health" },

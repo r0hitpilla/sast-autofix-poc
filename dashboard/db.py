@@ -131,6 +131,53 @@ class TrackedFinding(Base):
     commit: Mapped[str | None] = mapped_column(String(64))
     pr_number: Mapped[int | None] = mapped_column(Integer)
     pr_url: Mapped[str | None] = mapped_column(Text)
+    # A person's decision about this finding. Kept across pipeline runs: the
+    # refresh recomputes the fields above and never touches these.
+    decision: Mapped[str | None] = mapped_column(String(16))   # false_positive | suppressed
+    decision_reason: Mapped[str | None] = mapped_column(Text)
+    decided_by: Mapped[str | None] = mapped_column(Text)        # email of the decider
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Ticket created for this finding (e.g. a Jira issue).
+    issue_key: Mapped[str | None] = mapped_column(String(64))
+    issue_url: Mapped[str | None] = mapped_column(Text)
+
+
+class Integration(Base):
+    """A connection to an outside system. Secrets are encrypted (integrations.py)."""
+    __tablename__ = "integrations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    provider: Mapped[str] = mapped_column(String(32), unique=True)   # see integrations.PROVIDERS
+    config: Mapped[dict] = mapped_column(JSONType, default=dict)      # non-secret settings
+    secret_enc: Mapped[str] = mapped_column(Text)                     # encrypted JSON of secrets
+    events: Mapped[list] = mapped_column(JSONType, default=list)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    status: Mapped[str] = mapped_column(String(16), default="untested")  # connected | failing | untested
+    last_test_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_test_detail: Mapped[list] = mapped_column(JSONType, default=list)
+    last_event_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(Text)
+    created_by: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class OutboxMessage(Base):
+    """A notification waiting to be delivered. Written by ingest, sent by the
+    dashboard service (which alone holds the key to the integration secrets)."""
+    __tablename__ = "notification_outbox"
+    __table_args__ = (Index("ux_outbox_once", "integration_id", "event", "run_id", unique=True),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    integration_id: Mapped[int] = mapped_column(ForeignKey("integrations.id", ondelete="CASCADE"), index=True)
+    event: Mapped[str] = mapped_column(String(32))
+    run_id: Mapped[str] = mapped_column(String(64))
+    payload: Mapped[dict] = mapped_column(JSONType, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    last_error: Mapped[str | None] = mapped_column(Text)
 
 
 class FindingRow(Base):

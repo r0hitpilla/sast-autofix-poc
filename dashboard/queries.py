@@ -246,6 +246,12 @@ def finding_summary(row: FindingRow, run: Run | None = None, tracked: TrackedFin
         "occurrences": tracked.occurrences,
         "first_seen": iso(tracked.first_seen),
         "last_seen": iso(tracked.last_seen),
+        "decision": tracked.decision,
+        "decision_reason": tracked.decision_reason,
+        "decided_by": tracked.decided_by,
+        "decided_at": iso(tracked.decided_at),
+        "issue_key": tracked.issue_key,
+        "issue_url": tracked.issue_url,
     }
     return {
         **history,
@@ -311,6 +317,7 @@ def history_for(session: Session, repository: str) -> list[dict]:
             "llm_label": t.llm_label, "laya_score": t.laya_score, "rounds": t.rounds,
             "fix_attempts": t.fix_attempts, "fix_validated": t.fix_validated,
             "disposition": t.disposition, "pr_url": t.pr_url,
+            "decision": t.decision, "decision_reason": t.decision_reason,
             "fix_failure": fix.get("failure"),
             "fix_check_output": (fix.get("check_output") or "")[-600:] or None,
             "last_proposal": (fix.get("last_proposal") or "")[:800] or None,
@@ -339,7 +346,7 @@ def finding_detail(session: Session, finding_id: int) -> dict | None:
     ).one()
     evidence = row.evidence or []
     return {
-        **finding_summary(row, run),
+        **finding_summary(row, run, session.get(TrackedFinding, row.fingerprint)),
         "message": row.message, "owasp": row.owasp, "end_line": row.end_line,
         "snippet": row.snippet,
         "code": _parse_context(row.context, row.line, row.end_line or row.line),

@@ -27,7 +27,7 @@ function mockApi(routes: Routes) {
 
 const admin = {
   id: 1, email: "admin@example.com", name: "Admin", role: "admin", role_label: "Admin",
-  permissions: ["dashboard:read", "users:manage", "audit:read"],
+  permissions: ["dashboard:read", "findings:act", "users:manage", "audit:read", "integrations:read", "integrations:manage"],
 };
 
 const shellApi = {
@@ -121,5 +121,27 @@ describe("sign-in", () => {
     await screen.findAllByText("Overview");
     expect(screen.queryByText("Users & roles")).not.toBeInTheDocument();
     expect(screen.queryByText("Audit Log")).not.toBeInTheDocument();
+  });
+});
+
+describe("integrations", () => {
+  const item = (key: string, name: string, status: string, extra = {}) => ({
+    key, name, available: status !== "unavailable", builtin: false, auth: null, permissions: [], fields: [],
+    events: [], status, meta: "", configured: status === "connected", ...extra,
+  });
+
+  it("lists providers by category with their real status", async () => {
+    mockApi({ ...shellApi, "/integrations": {
+      outbox_pending: 0, secrets_ready: true,
+      categories: [
+        { category: "Notifications", items: [item("slack", "Slack", "connected", { enabled: true })] },
+        { category: "Source control", items: [item("gitlab", "GitLab", "unavailable")] },
+      ],
+    } });
+    at("/integrations");
+    expect(await screen.findByText("Slack")).toBeInTheDocument();
+    expect(screen.getByText("Connected")).toBeInTheDocument();
+    expect(screen.getByText("Not available yet")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Coming later" })).toBeDisabled();
   });
 });
