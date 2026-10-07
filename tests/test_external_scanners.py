@@ -104,3 +104,71 @@ def test_missing_binary_is_an_error_not_a_silent_skip(monkeypatch):
     monkeypatch.setattr(external_scanners.shutil, "which", lambda name: None)
     with pytest.raises(RuntimeError, match="gitleaks is not installed"):
         external_scanners.run_gitleaks(".")
+
+
+# ---- osv-scanner: retries and reuse ---------------------------------------------------
+
+import subprocess as _subprocess
+from types import SimpleNamespace
+from unittest.mock import patch
+
+
+@pytest.fixture
+def osv(tmp_path, monkeypatch):
+    external_scanners._osv_cache.clear()
+    monkeypatch.setattr(external_scanners.shutil, "which", lambda name: "/usr/bin/osv-scanner")
+    monkeypatch.setattr(external_scanners.time, "sleep", lambda s: None)
+    (tmp_path / "requirements.txt").write_text("Flask>=3.1.3\n")
+    return tmp_path
+
+
+def osv_run(*results):
+    queue = list(results)
+    calls = []
+
+    def fake(cmd, **kwargs):
+        calls.append(cmd)
+        code, out, err = queue.pop(0)
+        return SimpleNamespace(returncode=code, stdout=out, stderr=err)
+
+    return fake, calls
+
+
+def test_a_network_blip_is_retried_instead_of_killing_the_run(osv):
+    fake, calls = osv_run((127, "", "dns: server misbehaving"), (127, "", "dns"), (0, '{"results": []}', ""))
+    with patch.object(external_scanners.subprocess, "run", fake):
+        assert external_scanners.run_osv(str(osv)) == []
+    assert len(calls) == 3
+
+
+def test_it_gives_up_with_the_reason_after_the_retries(osv):
+    fake, calls = osv_run(*[(127, "", "lookup api.osv.dev failed")] * 5)
+    with patch.object(external_scanners.subprocess, "run", fake):
+        with pytest.raises(RuntimeError, match="after 3 attempts.*api.osv.dev"):
+            external_scanners.run_osv(str(osv))
+    assert len(calls) == 3
+
+
+def test_the_answer_is_reused_while_the_dependency_files_are_unchanged(osv):
+    fake, calls = osv_run((0, '{"results": []}', ""))
+    with patch.object(external_scanners.subprocess, "run", fake):
+        external_scanners.run_osv(str(osv))
+        (osv / "app.py").write_text("print('a fix to python code')\n")
+        external_scanners.run_osv(str(osv))          # no second call: nothing it depends on changed
+    assert len(calls) == 1
+
+
+def test_a_changed_requirements_file_is_scanned_again(osv):
+    fake, calls = osv_run((0, '{"results": []}', ""), (0, '{"results": []}', ""))
+    with patch.object(external_scanners.subprocess, "run", fake):
+        external_scanners.run_osv(str(osv))
+        (osv / "requirements.txt").write_text("Flask>=3.1.3\nrequests>=2.33.0\n")
+        external_scanners.run_osv(str(osv))
+    assert len(calls) == 2
+
+
+def test_dependency_files_in_virtualenvs_do_not_invalidate_the_answer(osv):
+    (osv / ".venv").mkdir()
+    before = external_scanners.manifest_fingerprint(str(osv))
+    (osv / ".venv" / "requirements.txt").write_text("anything\n")
+    assert external_scanners.manifest_fingerprint(str(osv)) == before
