@@ -12,10 +12,12 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 sys.path.insert(0, ROOT)
 
 from dashboard import api  # noqa: E402
-from dashboard.db import Base, make_sessionmaker  # noqa: E402
+from dashboard.auth import hash_password  # noqa: E402
+from dashboard.db import Base, User, make_sessionmaker  # noqa: E402
 from dashboard.ingest import ingest  # noqa: E402
 
 NOW = datetime.now(timezone.utc)
+ADMIN_PASSWORD = "correct horse battery"
 
 
 def finding(fp, line, cwe, severity, route, outcome, validated=False, attempts=None, score=0.9):
@@ -104,7 +106,15 @@ def client(seeded, monkeypatch, tmp_path):
     (dist / "index.html").write_text("<html>app</html>")
     (dist / "assets" / "app.js").write_text("js")
     monkeypatch.setenv("SAST_WEB_DIST", str(dist))
-    yield TestClient(api.app)
+    with seeded() as s:
+        s.add(User(email="admin@example.com", name="Admin", role="admin",
+                   password_hash=hash_password(ADMIN_PASSWORD), active=True, created_at=NOW))
+        s.commit()
+    client = TestClient(api.app)
+    # Existing tests exercise the data API; they run as a signed-in admin.
+    assert client.post("/api/auth/login", json={"name": "admin",
+                                                "password": ADMIN_PASSWORD}).status_code == 200
+    yield client
     api.app.dependency_overrides.clear()
 
 

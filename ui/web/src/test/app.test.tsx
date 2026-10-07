@@ -15,12 +15,23 @@ function mockApi(routes: Routes) {
     const key = url.pathname.replace(/^\/api/, "");
     const hit = Object.entries(routes).find(([k]) => k === key || (k.endsWith("*") && key.startsWith(k.slice(0, -1))));
     if (!hit) return new Response(JSON.stringify({ detail: "not found" }), { status: 404 });
-    const v = hit[1];
-    return typeof v === "function" ? (v as () => Response)() : new Response(JSON.stringify(v), { status: 200 });
+    const v = hit[1] as unknown;
+    if (typeof v === "function") return (v as () => Response)();
+    if (v && typeof v === "object" && "status" in v && "body" in v) {
+      const { status, body } = v as { status: number; body: unknown };
+      return new Response(JSON.stringify(body), { status });
+    }
+    return new Response(JSON.stringify(v), { status: 200 });
   });
 }
 
+const admin = {
+  id: 1, email: "admin@example.com", name: "Admin", role: "admin", role_label: "Admin",
+  permissions: ["dashboard:read", "findings:act", "users:manage", "audit:read", "integrations:read", "integrations:manage"],
+};
+
 const shellApi = {
+  "/auth/me": admin,
   "/meta": { version: "1.0.0", repositories: ["o/r"] },
   "/findings": { total: 6, items: [] },
   "/prs": { items: [] },
@@ -93,5 +104,56 @@ describe("pages", () => {
     mockApi(shellApi);
     at("/nope");
     expect(await screen.findByText(/This page doesn’t exist/)).toBeInTheDocument();
+  });
+});
+
+describe("sign-in", () => {
+  it("shows the sign-in page when there is no session", async () => {
+    mockApi({ "/auth/me": { status: 401, body: { detail: "sign in required" } } });
+    at("/");
+    expect(await screen.findByRole("heading", { name: "Sign in" })).toBeInTheDocument();
+  });
+
+  it("shows user administration and the audit log only to roles that have them", async () => {
+    mockApi({ ...shellApi, "/auth/me": { ...admin, role: "developer", role_label: "Developer",
+                                         permissions: ["dashboard:read"] } });
+    at("/");
+    await screen.findAllByText("Overview");
+    expect(screen.queryByText("Users & roles")).not.toBeInTheDocument();
+    expect(screen.queryByText("Audit Log")).not.toBeInTheDocument();
+  });
+});
+
+describe("integrations", () => {
+  const item = (key: string, name: string, status: string, extra = {}) => ({
+    key, name, available: status !== "unavailable", builtin: false, auth: null, permissions: [], fields: [],
+    events: [], status, meta: "", configured: status === "connected", ...extra,
+  });
+
+  it("lists providers by category with their real status", async () => {
+    mockApi({ ...shellApi, "/integrations": {
+      outbox_pending: 0, secrets_ready: true,
+      categories: [
+        { category: "Notifications", items: [item("slack", "Slack", "connected", { enabled: true })] },
+        { category: "Source control", items: [item("gitlab", "GitLab", "unavailable")] },
+      ],
+    } });
+    at("/integrations");
+    expect(await screen.findByText("Slack")).toBeInTheDocument();
+    expect(screen.getByText("Connected")).toBeInTheDocument();
+    expect(screen.getByText("Not available yet")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Coming later" })).toBeDisabled();
+  });
+});
+
+describe("policies", () => {
+  it("explains the strict default and needs a note before publishing", async () => {
+    const strict = { severity_actions: { Critical: "block", High: "block", Medium: "block", Low: "block" },
+                     decisions_clear_blocks: false, autofix: true, never_autofix: [], repositories: ["*"], branches: ["*"] };
+    mockApi({ ...shellApi, "/policy": { name: "Production Security Policy", active: null, default: strict,
+                                         always_never_autofix: [".github/**"], versions: [], repositories: [] } });
+    at("/policies");
+    expect(await screen.findByText(/strict default applies/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Publish v1" })).toBeDisabled();
   });
 });

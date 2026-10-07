@@ -184,3 +184,64 @@ a:hover { text-decoration: underline; }
   .posture-row { grid-template-columns: 64px 1fr 36px; }
   .posture-row > :last-child { grid-column: 2 / -1; }
 }
+
+/* ---- sign-in (matches the design) ---- */
+.login-grid { min-height: 100vh; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); background: var(--bg); color: var(--ink); font-family: var(--sans); }
+.login-main { display: flex; align-items: center; justify-content: center; padding: 48px; }
+.login-form { width: 100%; max-width: 360px; display: flex; flex-direction: column; gap: 20px; }
+.login-brand { display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 18px; }
+.login-form h1 { margin: 0; font-size: 26px; font-weight: 600; letter-spacing: -0.02em; }
+.login-sub { color: var(--mute); font-size: 14px; margin: 6px 0 0; }
+.login-sso { height: 40px; border-radius: 10px; border: 1px solid var(--line); background: var(--card); color: var(--mute); font-size: 14px; cursor: not-allowed; font-family: inherit; }
+.login-or { display: flex; align-items: center; gap: 10px; color: var(--mute); font-size: 12px; }
+.login-or span { flex: 1; height: 1px; background: var(--line); }
+.login-field { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--mute); }
+.login-input { height: 40px; border-radius: 10px; border: 1px solid var(--line); background: var(--card); color: var(--ink); padding: 0 12px; font-size: 14px; font-family: var(--sans); }
+.login-error { color: var(--red); font-size: 13px; }
+.login-submit { height: 40px; border-radius: 10px; border: 0; background: var(--ink); color: var(--bg); font-size: 14px; font-weight: 500; cursor: pointer; font-family: inherit; }
+.login-submit:disabled { opacity: 0.6; cursor: default; }
+.login-foot { font-size: 12px; color: var(--mute); line-height: 1.5; margin: 0; }
+.login-side { background: var(--soft); border-left: 1px solid var(--line); padding: 48px; display: flex; flex-direction: column; justify-content: center; gap: 10px; }
+.login-side-title { font-family: var(--mono); font-size: 11px; color: var(--mute); letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 8px; }
+.login-step { display: flex; align-items: center; gap: 14px; font-size: 14px; }
+.login-step-n { width: 26px; height: 26px; border-radius: 50%; border: 1px solid var(--line); background: var(--card); display: grid; place-items: center; font-family: var(--mono); font-size: 11px; flex: none; }
+@media (max-width: 800px) {
+  .login-grid { grid-template-columns: minmax(0, 1fr); }
+  .login-main { padding: 24px 16px; }
+  .login-side { display: none; }
+}
+
+/* ---- user administration ---- */
+.user-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.user-form .input { width: auto; flex: 1 1 180px; }
+.field { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--mute); }
+.decision-reason { width: 100%; height: auto; padding: 8px 10px; font-family: var(--sans); resize: vertical; }
+
+/* ---- integrations (matches the design) ---- */
+.integ-cat { font-family: var(--mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--mute); margin-bottom: 10px; }
+.integ-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+.integ-card { padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
+.integ-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 14px; }
+.integ-meta { font-family: var(--mono); font-size: 12px; color: var(--mute); line-height: 1.6; min-height: 38px; white-space: pre-line; overflow-wrap: anywhere; }
+.wiz-steps { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+.wiz-step { padding: 4px 10px; border-radius: 999px; font-size: 12px; border: 1px solid var(--line); background: var(--card); color: var(--mute); }
+.wiz-step.now { background: var(--ink); color: var(--bg); }
+.wiz-step.done { background: var(--greenbg); color: var(--green); }
+.wiz-card { max-width: 720px; }
+.wiz-card > * + * { margin-top: 14px; }
+.wiz-title { font-size: 16px; font-weight: 600; }
+.wiz-list { display: flex; flex-direction: column; gap: 8px; }
+.wiz-item { display: flex; gap: 10px; align-items: center; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; flex-wrap: wrap; }
+.wiz-input { width: 100%; height: 36px; font-size: 13px; }
+.wiz-nav { display: flex; gap: 8px; justify-content: space-between; }
+
+/* ---- policies (matches the design) ---- */
+.policy-grid { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(280px, 1fr); gap: 20px; align-items: start; }
+.policy-row { display: grid; grid-template-columns: minmax(0, 1fr) 230px; gap: 12px; align-items: center; padding: 12px 0; border-top: 1px solid var(--line); font-weight: 500; }
+.policy-row .select, .policy-row .input { width: 100%; }
+.policy-note { margin: 4px 0 12px; }
+.scope-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.scope-chip { border: 1px solid var(--line); border-radius: 8px; padding: 4px 9px; font-size: 12px; }
+.version-row { display: grid; grid-template-columns: 36px 1fr; gap: 10px; padding: 8px 0; border-top: 1px solid var(--line); }
+@media (max-width: 900px) { .policy-grid { grid-template-columns: minmax(0, 1fr); } .policy-row { grid-template-columns: minmax(0, 1fr); } }
+.fix-trust { display: flex; gap: 8px; align-items: baseline; margin-top: 10px; font-size: 13px; }

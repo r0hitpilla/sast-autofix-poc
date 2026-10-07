@@ -61,3 +61,11 @@ def test_unreachable_dashboard_means_no_history_not_a_failure():
 def test_no_dashboard_configured_means_no_history():
     assert fetch_history(None, REPO) == {}
     assert fetch_history("", REPO) == {}
+
+
+def test_a_persons_decision_reaches_the_llm_as_context_not_proof():
+    note = history_note({**RECORD, "decision": "false_positive", "decided_by": "eng@example.com",
+                         "decision_reason": "only reachable from tests"})
+    assert "marked this a false positive" in note
+    assert "only reachable from tests" in note
+    assert "it is not proof" in note

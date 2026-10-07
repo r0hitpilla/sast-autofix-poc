@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from sqlalchemy import delete, select
 
 from .db import FindingRow, Run, make_sessionmaker
+from .integrations import enqueue_for_run
 from .tracking import refresh
 
 SUPPORTED_SCHEMA_VERSIONS = {2}
@@ -107,6 +108,9 @@ def ingest(report: dict, sessionmaker=None) -> Run:
         session.add(run)
         session.flush()
         refresh(session, list(old) + [row.fingerprint for row in run.findings])
+        # Notifications are queued here and sent by the dashboard service,
+        # which holds the key to the integration secrets; CI doesn't.
+        enqueue_for_run(session, run)
     return run
 
 

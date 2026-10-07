@@ -291,3 +291,12 @@ def test_history_endpoint_reports_earlier_findings_for_a_repository(Session):
     assert items[0]["fix_attempts"] == 3 and items[0]["fix_validated"] is False
     with Session() as s:
         assert queries.history_for(s, "other/repo") == []
+
+
+def test_the_fix_trust_score_reaches_the_finding_detail(Session):
+    f = finding("trust-1", 5, "CWE-79: x", "High", "fix", "fixed and validated", True, 1)
+    f["fix"]["trust"], f["fix"]["review"] = 0.83, "uses a constant template"
+    run = ingest(report("t1", findings=[f]), Session)
+    with Session() as s:
+        detail = queries.finding_detail(s, run.findings[0].id)
+    assert detail["fix"]["trust"] == 0.83 and detail["fix"]["review"] == "uses a constant template"

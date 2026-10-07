@@ -392,3 +392,28 @@ def test_same_line_is_triaged_and_fixed_once(tmp_path, capsys):
     # ...and the one fix was told about both rules on that line.
     assert "xss.two" in mock_fix.call_args.args[0].message
     assert "not fixed (same code as a failed fix): 1" in capsys.readouterr().out.lower()
+
+
+def test_a_later_fix_is_shown_the_code_as_earlier_fixes_left_it():
+    from cli import current_view
+
+    original = make_finding(line=78)
+    original.rule_id = "render-template-string"
+    original.snippet = 'return render_template_string(f"<p>{note}</p>")'
+    # Another rule's fix rewrote the line, and the scanner now reports it elsewhere.
+    now = make_finding(line=84)
+    now.rule_id, now.file = "render-template-string", original.file
+    now.snippet = 'return render_template_string("<p>{{ note }}</p>", note=note)'
+    other_rule = make_finding(line=79)
+    other_rule.rule_id = "something-else"
+
+    seen = current_view(original, [other_rule, now])
+    assert (seen.line, seen.snippet) == (84, now.snippet)
+    assert original.line == 78  # the report keeps the original finding
+
+
+def test_current_view_leaves_a_finding_alone_when_the_rescan_no_longer_matches_it():
+    from cli import current_view
+
+    original = make_finding(line=78)
+    assert current_view(original, []) is original

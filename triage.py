@@ -1,6 +1,7 @@
 import re
 import sys
 
+from injection import FENCE_RULE, fence, suspicious
 from models import Finding, TriageResult
 
 TRIAGE_QUESTION = "is this a true positive security vulnerability"
@@ -64,7 +65,8 @@ def build_reasoning_prompt(finding: Finding, context: str = "", history: str = "
         f"Rule: {finding.rule_id}\n"
         f"CWE: {finding.cwe}\n"
         f"Semgrep message: {finding.message}\n\n"
-        f"Code context:\n{context or finding.snippet}\n\n"
+        f"{FENCE_RULE}\n\n"
+        f"Code context:\n{fence(context or finding.snippet)}\n\n"
         f"{earlier}"
         "In plain text, reason about whether this is a real, exploitable "
         "vulnerability or a false positive. Note anything Semgrep's static "
@@ -88,7 +90,8 @@ def build_followup_prompt(
         f"Line: {finding.line}\n"
         f"CWE: {finding.cwe}\n"
         f"Semgrep message: {finding.message}\n\n"
-        f"Code context:\n{context or finding.snippet}\n\n"
+        f"{FENCE_RULE}\n\n"
+        f"Code context:\n{fence(context or finding.snippet)}\n\n"
         f"Evidence gathered so far:\n{transcript}\n\n"
         f"Answer this specific question concisely, citing line numbers:\n{question}"
         + VERDICT_INSTRUCTION
@@ -149,7 +152,14 @@ def decide(
     vanishes from the merge gate. So a fix needs Laya confident, OR the LLM
     calling it a true positive while Laya is at least unsure; a reject needs
     Laya AND the LLM to both say false positive. Anything else is review.
+
+    When Laya is confident but the LLM says false positive, the two disagree:
+    that goes to review, not to a fix. The benchmark showed Laya scoring
+    every flagged finding 0.8-0.95, real or not, while the LLM correctly
+    called the false alarms; auto-fixing them only adds needless changes.
     """
+    if label == "fp" and score > threshold_fix:
+        return "review"
     if score > threshold_fix or (label == "tp" and score >= threshold_review):
         return "fix"
     if score < threshold_review and label == "fp":
@@ -184,9 +194,20 @@ def triage_finding(
     left to ask, or after `max_rounds` follow-up questions. Laya's last score
     is the verdict.
     """
+    prompt = build_reasoning_prompt(finding, context, history)
     try:
-        initial = ollama.generate(build_reasoning_prompt(finding, context, history))
-    except Exception as exc:
+        initial = ollama.generate(prompt)
+    except Exception as first:
+        # One retry without hidden reasoning: a runaway "thinking" loop is
+        # the usual cause, and the same prompt without it rarely loops.
+        print(f"[triage warning: {first}; retrying without hidden reasoning]", file=sys.stderr)
+        try:
+            initial = ollama.generate(prompt, think=False)
+        except Exception as exc:
+            initial = None
+            failure = exc
+    if initial is None:
+        exc = failure
         print(
             f"[triage error: ollama call failed for {finding.file}:{finding.line}: {exc}]",
             file=sys.stderr,
@@ -252,10 +273,23 @@ def triage_finding(
             break
         evidence.append((question, answer))
 
+    route_ = decide(score, llm_label(initial), threshold_fix, threshold_review)
+    markers = suspicious(context or finding.snippet)
+    reasoning = format_evidence(evidence)
+    if markers:
+        # The code talks to the model. Whatever it said, the finding stays in
+        # front of a person: a reject becomes a review.
+        print(f"    [injection] {', '.join(markers)} in {finding.file} -> never rejected",
+              file=sys.stderr, flush=True)
+        if route_ == "reject":
+            route_ = "review"
+        reasoning += ("\n\n[possible prompt injection in the scanned code: "
+                      f"{', '.join(markers)}. This finding can't be rejected automatically.]")
     return TriageResult(
         finding=finding,
-        llm_reasoning=format_evidence(evidence),
+        llm_reasoning=reasoning,
         laya_score=score,
-        route=decide(score, llm_label(initial), threshold_fix, threshold_review),
+        route=route_,
         evidence=evidence,
+        injection=markers,
     )

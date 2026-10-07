@@ -20,6 +20,9 @@ export interface FindingSummary {
   cvss: number | null; risk: number | null; advisory_url: string | null;
   occurrences?: number; first_seen?: string | null; last_seen?: string | null;
   also_flagged_by?: string[];
+  decision?: "false_positive" | "suppressed" | null; decision_reason?: string | null;
+  decided_by?: string | null; decided_at?: string | null;
+  issue_key?: string | null; issue_url?: string | null;
   detected_at: string | null;
 }
 
@@ -33,6 +36,7 @@ export interface Provenance {
 
 export interface FixRecord {
   validated: boolean; scanner_clean: boolean; attempts: number; failure: string | null;
+  trust?: number | null; review?: string | null;
   note: string | null; diff: string | null; created_files: string[];
   check_output: string | null; last_proposal: string | null;
 }
@@ -121,3 +125,47 @@ export interface Report {
 }
 
 export interface Meta { version: string; repositories: string[] }
+
+export interface Me {
+  id: number; email: string; name: string; role: string; role_label: string; permissions: string[];
+}
+
+export interface UserRow extends Me {
+  active: boolean; created_at: string | null; last_login_at: string | null;
+}
+
+export interface AuditEvent {
+  id: number; at: string | null; actor_email: string | null; action: string; outcome: string;
+  target: string | null; detail: Record<string, unknown>; ip: string | null;
+}
+
+export interface IntegrationField { key: string; label: string; secret: boolean; required: boolean }
+export interface IntegrationItem {
+  key: string; name: string; available: boolean; builtin: boolean; auth: string | null; permissions: string[];
+  fields: IntegrationField[]; events: { key: string; label: string }[];
+  status: "connected" | "failing" | "untested" | "not_configured" | "unavailable" | "disabled";
+  meta: string; configured: boolean; enabled?: boolean; config?: Record<string, string>; secrets_set?: string[];
+  subscribed?: string[]; last_test_detail?: TestResult[]; last_error?: string | null;
+}
+export interface TestResult { check: string; ok: boolean; detail: string }
+export interface IntegrationsData {
+  categories: { category: string; items: IntegrationItem[] }[];
+  outbox_pending: number; secrets_ready: boolean;
+}
+
+export type GateAction = "block" | "review" | "allow";
+export interface PolicyContent {
+  severity_actions: Record<Severity, GateAction>; decisions_clear_blocks: boolean; autofix: boolean;
+  never_autofix: string[]; repositories: string[]; branches: string[];
+}
+export interface PolicyVersionRow {
+  version: number; content: PolicyContent; note: string; published_by: string; published_at: string | null;
+}
+export interface PolicyData {
+  name: string; active: PolicyVersionRow | null; default: PolicyContent; always_never_autofix: string[];
+  versions: PolicyVersionRow[]; repositories: string[];
+}
+export interface RuleRow {
+  rule_id: string; cwe: string; severity: Severity; pack: string; findings: number; last_seen: string | null;
+  gate_action: GateAction;
+}

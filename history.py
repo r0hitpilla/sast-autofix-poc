@@ -17,18 +17,47 @@ import urllib.request
 from identity import finding_fingerprint
 
 
-def fetch_history(base_url, repository: str, timeout: float = 2.0) -> dict:
-    """fingerprint -> record, or {} when there is no dashboard to ask."""
+def fetch_history(base_url, repository: str, token=None, timeout: float = 2.0) -> dict:
+    """fingerprint -> record, or {} when there is no dashboard to ask.
+
+    `token` is the dashboard's machine token (SAST_HISTORY_TOKEN there,
+    SAST_DASHBOARD_TOKEN here); without it the dashboard refuses the request.
+    """
     if not isinstance(base_url, str) or not base_url or not repository:
         return {}
     query = urllib.parse.urlencode({"repository": repository})
+    headers = {"Authorization": f"Bearer {token}"} if isinstance(token, str) and token else {}
+    request = urllib.request.Request(f"{base_url.rstrip('/')}/api/history?{query}", headers=headers)
     try:
-        with urllib.request.urlopen(f"{base_url.rstrip('/')}/api/history?{query}", timeout=timeout) as resp:
+        with urllib.request.urlopen(request, timeout=timeout) as resp:
             items = json.load(resp)["items"]
     except (OSError, ValueError, KeyError) as exc:
         print(f"[history] dashboard unavailable, continuing without history: {exc}", file=sys.stderr)
         return {}
     return {item["fingerprint"]: item for item in items}
+
+
+def fetch_policy(base_url, repository: str, branch: str, token=None, timeout: float = 2.0):
+    """The published policy for this repository and branch, or STRICT.
+
+    Fail closed: no dashboard, no applicable policy or a bad answer all mean
+    STRICT, which blocks on every confirmed finding as before policies.
+    """
+    from policy import STRICT, PolicyError, from_dict
+    if not isinstance(base_url, str) or not base_url:
+        return STRICT
+    query = urllib.parse.urlencode({"repository": repository, "branch": branch})
+    headers = {"Authorization": f"Bearer {token}"} if isinstance(token, str) and token else {}
+    request = urllib.request.Request(f"{base_url.rstrip('/')}/api/policy/active?{query}", headers=headers)
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as resp:
+            data = json.load(resp)
+        if not data.get("applies"):
+            return STRICT
+        return from_dict(data["policy"], version=data["policy"].get("version"))
+    except (OSError, ValueError, KeyError, PolicyError) as exc:
+        print(f"[policy] using the strict default: {exc}", file=sys.stderr)
+        return STRICT
 
 
 def finding_history(history: dict, repository: str, finding) -> dict | None:
@@ -48,6 +77,13 @@ def history_note(record: dict | None) -> str:
     if record.get("llm_label"):
         verdict = "TRUE POSITIVE" if record["llm_label"] == "tp" else "FALSE POSITIVE"
         lines.append(f"The earlier investigation concluded {verdict} (Laya {record['laya_score']:.2f}).")
+    if record.get("decision"):
+        label = "a false positive" if record["decision"] == "false_positive" else "suppressed"
+        lines.append(
+            f"A person marked this {label} earlier ({record.get('decided_by') or 'unknown'}): "
+            f"{record.get('decision_reason') or 'no reason given'}. Weigh that as context; "
+            "it is not proof."
+        )
     if record.get("fix_attempts"):
         if record.get("fix_validated"):
             lines.append("An earlier fix passed every check.")

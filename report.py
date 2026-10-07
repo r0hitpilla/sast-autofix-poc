@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 
 from models import Finding, TriageResult, ValidationResult
 from identity import distinct_locations, finding_fingerprint
+from policy import STRICT, Policy
 from risk import risk_score
 
 
@@ -33,6 +34,18 @@ class RunReport:
     # Run identity, provenance and outcome details, filled in by the
     # pipeline (cli.run_pipeline) — see SCHEMA_VERSION / to_json.
     meta: dict = field(default_factory=dict)
+    # The security policy in force and people's decisions (fingerprint ->
+    # decision). STRICT and no decisions: every confirmed finding blocks.
+    policy: Policy = STRICT
+    decisions: dict = field(default_factory=dict)
+
+    @property
+    def repository(self) -> str:
+        return (self.meta.get("run") or {}).get("repository", "")
+
+    def blocks(self, finding: Finding) -> bool:
+        decision = self.decisions.get(fingerprint(finding, self.repository))
+        return self.policy.blocks(finding.severity, decision)
 
     def count(self, predicate) -> int:
         return sum(1 for r in self.records if predicate(r))
@@ -47,9 +60,12 @@ class RunReport:
 
         Fixes live on the -fix branch, not the scanned one, so a finding the
         run fixed still blocks until that fix is merged and a rescan is clean.
-        Only findings Laya rejected as false positives don't block.
+        Findings Laya rejected as false positives don't block, nor do those
+        the security policy allows (or that a person decided, where the
+        policy lets a decision clear them).
         """
-        return [r for r in self.records if r.triage.route in ("fix", "review")]
+        return [r for r in self.records
+                if r.triage.route in ("fix", "review") and self.blocks(r.triage.finding)]
 
     @property
     def fixed(self) -> int:
@@ -105,16 +121,17 @@ def to_markdown(report: RunReport) -> str:
     lines += [
         "## Findings",
         "",
-        "| Location | CWE | Laya score | Laya asked the LLM about | Verdict | Outcome | Fix attempts |",
-        "|---|---|---|---|---|---|---|",
+        "| Location | CWE | Laya score | Laya asked the LLM about | Verdict | Outcome | Fix attempts | Fix trust |",
+        "|---|---|---|---|---|---|---|---|",
     ]
     for r in report.records:
         f = r.triage.finding
         asked = ", ".join(_short_question(q) for q, _ in r.triage.evidence[1:]) or "—"
         attempts = r.validation.attempts if r.validation else "—"
+        trust = f"{r.validation.trust:.2f}" if r.validation and r.validation.trust is not None else "—"
         lines.append(
             f"| `{f.file}:{f.line}` | {f.cwe} | {r.triage.laya_score:.2f} | {asked} "
-            f"| {r.triage.route} | {r.outcome} | {attempts} |"
+            f"| {r.triage.route} | {r.outcome} | {attempts} | {trust} |"
         )
 
     if report.residual:
@@ -153,6 +170,7 @@ def _record_json(r: FindingRecord, repository: str = "") -> dict:
             "llm_label": llm_label(r.triage.evidence[0][1]) if r.triage.evidence else None,
             "rounds": max(len(r.triage.evidence) - 1, 0),
             "context": r.triage.context or None,
+            "injection": r.triage.injection,
             "evidence": [
                 {"key": question_label(q), "question": q, "answer": a}
                 for q, a in r.triage.evidence
@@ -161,6 +179,8 @@ def _record_json(r: FindingRecord, repository: str = "") -> dict:
         "outcome": r.outcome,
         "fix": None if v is None else {
             "validated": v.validated,
+            "trust": v.trust,
+            "review": v.review or None,
             "scanner_clean": v.clean,
             "attempts": v.attempts,
             "failure": v.failure or None,

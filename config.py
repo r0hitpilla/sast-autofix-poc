@@ -23,6 +23,8 @@ class Config:
     engines: tuple = ("semgrep",)
     # The dashboard's base URL: earlier runs' findings are read from it. None: no history.
     dashboard_url: str | None = None
+    # The dashboard's machine token; the history is refused without it.
+    dashboard_token: str | None = None
 
 
 def resolve_ruleset(ruleset: str, config_dir: str) -> str:
@@ -52,4 +54,5 @@ def load_config(path: str = "config.yaml") -> Config:
         fix_models=raw["ollama"].get("fix_models") or [raw["ollama"]["model"]],
         engines=tuple(raw.get("engines", ["semgrep"])),
         dashboard_url=os.environ.get("SAST_DASHBOARD_URL", raw.get("dashboard_url")) or None,
+        dashboard_token=os.environ.get("SAST_DASHBOARD_TOKEN") or None,
     )

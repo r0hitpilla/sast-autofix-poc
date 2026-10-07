@@ -1,9 +1,11 @@
 import { type FormEvent, type ReactNode, useEffect, useState } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
-import { qs } from "../api/client";
+import { qs, sendJson, LOGIN_PATH } from "../api/client";
 import type { Health, Meta, Paged, FindingSummary, PrSummary } from "../api/types";
 import { useApi } from "../api/useApi";
 import { WINDOWS, carry, useFilters } from "../lib/filters";
+import { ROLE_OPTIONS } from "../lib/roles";
+import { can, useSession } from "../lib/session";
 import { useTheme } from "../lib/theme";
 
 const NAV = [
@@ -11,9 +13,14 @@ const NAV = [
   { to: "/findings", label: "Findings", badge: "findings" },
   { to: "/runs", label: "Autofix Runs" },
   { to: "/pulls", label: "Pull Requests", badge: "prs" },
+  { to: "/policies", label: "Policies" },
+  { to: "/integrations", label: "Integrations", perm: "integrations:read" },
   { to: "/models", label: "Models" },
+  { to: "/rules", label: "Rules" },
   { to: "/reports", label: "Reports" },
   { to: "/health", label: "System Health" },
+  { to: "/users", label: "Users & roles", perm: "users:manage" },
+  { to: "/audit", label: "Audit Log", perm: "audit:read" },
 ] as const;
 
 export function Shell({ crumb, children }: { crumb: ReactNode; children: ReactNode }) {
@@ -27,6 +34,15 @@ export function Shell({ crumb, children }: { crumb: ReactNode; children: ReactNo
   const prs = useApi<{ items: PrSummary[] }>(`/prs${qs({ repository: repo })}`, 60000);
   const health = useApi<Health>("/health", 30000);
   const [query, setQuery] = useState(q);
+  const me = useSession();
+  const roleLabel = ROLE_OPTIONS.find((r) => r.value === me.role)?.label ?? me.role;
+  const signOut = async () => {
+    try {
+      await sendJson("POST", "/auth/logout", {});
+    } finally {
+      window.location.assign(LOGIN_PATH);
+    }
+  };
 
   useEffect(() => setOpen(false), [location.pathname]);
   useEffect(() => setQuery(q), [q]);
@@ -49,7 +65,7 @@ export function Shell({ crumb, children }: { crumb: ReactNode; children: ReactNo
       <aside className={`sidebar ${open ? "open" : ""}`} aria-label="Main navigation">
         <NavLink to={`/${carry(search)}`} className="brand"><span className="logo">S</span>SAST Autofix</NavLink>
         <nav className="nav">
-          {NAV.map((n) => (
+          {NAV.filter((n) => !("perm" in n) || can(me, n.perm)).map((n) => (
             <NavLink key={n.to} to={`${n.to}${carry(search)}`} end={"end" in n ? n.end : false}
                      className={({ isActive }) => (isActive ? "active" : "")}>
               <span>{n.label}</span>
@@ -60,12 +76,13 @@ export function Shell({ crumb, children }: { crumb: ReactNode; children: ReactNo
         <div className="sidebar-foot">
           <div className="sys" role="status"><span className={`dot ${health.data ? (down.length ? "bad" : "ok") : ""}`} />{sysText}</div>
           <div className="who">
-            <span className="avatar" aria-hidden="true">L</span>
+            <span className="avatar" aria-hidden="true">{(me.name || me.email).charAt(0).toUpperCase()}</span>
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontWeight: 500 }}>Local access</div>
-              <div className="mono mute" style={{ fontSize: 11 }}>{meta.data ? `v${meta.data.version}` : " "}</div>
+              <div style={{ fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={me.email}>{me.name || me.email}</div>
+              <div className="mono mute" style={{ fontSize: 11 }}>{roleLabel}{meta.data ? ` · v${meta.data.version}` : ""}</div>
             </div>
             <button className="btn sm" onClick={toggleTheme} aria-label="Toggle dark mode">{theme === "dark" ? "Light" : "Dark"}</button>
+            <button className="btn sm" onClick={signOut}>Sign out</button>
           </div>
         </div>
       </aside>
