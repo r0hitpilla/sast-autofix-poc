@@ -8,6 +8,8 @@ from git.exc import GitCommandError
 from code_context import dependency_summary, numbered_context, numbered_header
 from git_utils import checkout_branch
 from models import Finding, FixResult
+from fix_guard import forbidden_new_file
+from injection import FENCE_RULE, fence
 from playbooks import guidance_for
 
 DIFF_BLOCK_RE = re.compile(r"```(?:diff)?\n(.*?)```", re.DOTALL)
@@ -61,19 +63,20 @@ def build_fix_prompt(
         f"Line: {finding.line}\n"
         f"CWE: {finding.cwe}\n"
         f"Issue: {finding.message}\n\n"
-        f"Vulnerable code:\n{finding.snippet}\n"
+        f"{FENCE_RULE} Copy ORIGINAL lines from inside the markers exactly.\n\n"
+        f"Vulnerable code:\n{fence(finding.snippet)}\n"
     )
     if header:
         prompt += (
             "\nTop of the file — its existing imports (the number before each "
             "'|' is the line number, not part of the code):\n"
-            f"{header}\n"
+            f"{fence(header)}\n"
         )
     if context:
         prompt += (
             "\nCurrent file contents around the finding (the number before "
             "each '|' is the line number, not part of the code):\n"
-            f"{context}\n"
+            f"{fence(context)}\n"
         )
     if dependencies:
         prompt += (
@@ -131,6 +134,9 @@ def new_file_problem(repo, path: str) -> str | None:
     rel = os.path.relpath(full, root)
     if rel.startswith(PROTECTED_NEW_FILE_PREFIXES):
         return f"{path}: CI/repository configuration can't be created by a fix"
+    refused = forbidden_new_file(rel)
+    if refused:
+        return refused
     if os.path.exists(full):
         return f"{path} already exists; edit it with ORIGINAL/FIXED blocks instead"
     return None

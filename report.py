@@ -169,6 +169,7 @@ def _record_json(r: FindingRecord, repository: str = "") -> dict:
             "llm_label": llm_label(r.triage.evidence[0][1]) if r.triage.evidence else None,
             "rounds": max(len(r.triage.evidence) - 1, 0),
             "context": r.triage.context or None,
+            "injection": r.triage.injection,
             "evidence": [
                 {"key": question_label(q), "question": q, "answer": a}
                 for q, a in r.triage.evidence

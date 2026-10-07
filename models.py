@@ -28,6 +28,9 @@ class TriageResult:
     evidence: list[tuple[str, str]] = field(default_factory=list)
     # The numbered source the LLM was shown (for review UIs; "" if unread).
     context: str = ""
+    # Prompt-injection markers found in that source (see injection.py). Any
+    # marker means the finding can't be rejected, only fixed or reviewed.
+    injection: list[str] = field(default_factory=list)
 
 
 @dataclass

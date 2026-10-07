@@ -11,6 +11,7 @@ import difflib
 import re
 import sys
 
+from injection import FENCE_RULE, fence
 from models import Finding
 
 REVIEW_RE = re.compile(r"^[\s*_`#>-]*REVIEW[\s*_`]*:[\s*_`]*(APPROVE|REJECT)\b[\s*_`:—–-]*(.*)$",
@@ -39,7 +40,8 @@ def build_review_prompt(finding: Finding, diff: str, dependencies: str = "") -> 
         f"File: {finding.file}\n"
         f"CWE: {finding.cwe}\n"
         f"Finding: {finding.message}\n\n"
-        f"Proposed change:\n```diff\n{diff}\n```\n"
+        f"{FENCE_RULE}\n\n"
+        f"Proposed change (a diff):\n{fence(diff)}\n"
         f"{deps}\n"
         "Judge ONE thing: after this change, is the weakness actually "
         "remediated, the way current best practice (e.g. the OWASP Cheat "

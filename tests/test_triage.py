@@ -179,7 +179,7 @@ def test_llm_true_positive_plus_unsure_laya_is_fixed():
 
     assert decide(0.80, "tp", 0.8, 0.4) == "fix"   # the SQLi that went to review
     assert decide(0.80, None, 0.8, 0.4) == "review"
-    assert decide(0.95, "fp", 0.8, 0.4) == "fix"   # Laya confident overrides
+    assert decide(0.95, "fp", 0.8, 0.4) == "review"  # disagreement: a person decides, not a fix
 
 
 def test_llm_label_parses_the_verdict_line():

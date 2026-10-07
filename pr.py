@@ -117,6 +117,7 @@ def build_suggestions(unresolved) -> str:
             + (f" · {validation.attempts} fix attempt(s)" if validation else "")
             + "\n\n"
             f"**Flagged code:**\n```\n{finding.snippet}\n```\n\n"
+            + injection_warning(triage)
             + (f"**Analysis:** {analysis}\n\n" if analysis else "")
             + (
                 f"**Why the auto-fix was rejected:**\n```\n{tail(validation.test_output, 800)}\n```\n\n"
@@ -129,6 +130,15 @@ def build_suggestions(unresolved) -> str:
             )
         )
     return "\n".join(parts)
+
+
+def injection_warning(triage) -> str:
+    """A visible note when the scanned code tried to talk to the model."""
+    if not getattr(triage, "injection", None):
+        return ""
+    return ("> ⚠️ **Possible prompt injection:** the code around this finding contains text "
+            f"aimed at the AI ({', '.join(triage.injection)}). It was ignored, and this finding "
+            "can't be rejected automatically. Check that comment with the author.\n\n")
 
 
 def build_pr_body(
@@ -188,6 +198,7 @@ def build_pr_body(
                 for h in entry_hunks
             ) + "\n\n"
         follow_ups = max(len(triage.evidence) - 1, 0)
+        section += injection_warning(triage)
         section += (
             f"**Laya confidence:** {triage.laya_score:.2f} "
             f"(after {follow_ups} follow-up question(s) to the LLM)\n\n"

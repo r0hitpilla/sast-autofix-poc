@@ -7,6 +7,7 @@ import pyflakes.messages
 
 from code_context import dependency_summary
 from fix_review import file_diff, review_fix
+from fix_guard import added_risks
 from hallucination import check_references
 from fixer import fix_finding, remove_created, restore_file
 from models import Finding, FixResult, ValidationResult
@@ -159,6 +160,12 @@ def _check(
         invented += check_references(path, None, _read(target_repo, path), target_repo, requirements)
     if invented:
         broken = broken + invented
+    # Payloads: network, shell, eval, native code... never part of a security fix.
+    risky = added_risks(finding.file, baseline_content, _read(target_repo, finding.file))
+    for path in created_files or []:
+        risky += added_risks(path, None, _read(target_repo, path))
+    if risky:
+        broken = broken + risky
     if broken:
         tests_passed = False
         test_output = (
