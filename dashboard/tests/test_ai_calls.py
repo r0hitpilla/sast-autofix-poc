@@ -170,7 +170,7 @@ def test_a_call_langfuse_does_not_know_is_reported_not_raised(lf, monkeypatch):
 
 def test_metadata_only_tracing_has_no_text_to_show(lf, monkeypatch):
     monkeypatch.setattr(langfuse.httpx, "get", FakeGet([{"data": [{"id": SPAN, "input": None, "output": None}], "meta": {}}]))
-    assert "capture_content off" in langfuse.fetch_content(TRACE, SPAN)["reason"]
+    assert "metadata-only" in langfuse.fetch_content(TRACE, SPAN)["reason"]
 
 
 def test_a_down_langfuse_is_unavailable_not_an_error_page(lf, monkeypatch):

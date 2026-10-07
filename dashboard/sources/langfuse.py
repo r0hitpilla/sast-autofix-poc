@@ -77,7 +77,7 @@ def fetch_content(trace_id: str, span_id: str) -> dict:
                     reply, cut_out = _cut(obs.get("output"))
                     if prompt is None and reply is None:
                         return {"available": False, "reason": "Langfuse holds no prompt or reply for this call "
-                                                               "(tracing ran with capture_content off)."}
+                                                               "(metadata-only tracing, or a Laya call, which records timing only)."}
                     return {"available": True, "input": prompt, "output": reply, "truncated": cut_in or cut_out}
             cursor = (body.get("meta") or {}).get("cursor")
             if not cursor:
