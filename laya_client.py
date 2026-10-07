@@ -25,18 +25,18 @@ class LayaClient:
             error = f"{type(exc).__name__}: {exc}"[:300]
             raise
         finally:
-            ledger_call = Call(
-                at=at, purpose=tags.get("purpose", "laya"), model=self.model, provider="laya",
+            purpose, ref = tags.get("purpose", "laya"), tags.get("ref")
+            ids = self.tracer.span(
+                name=purpose, start_ns=start_ns, end_ns=time.time_ns(), ok=error is None, error=error,
+                metadata={"model": self.model, "provider": "laya", "ref": ref},
+            )
+            self.usage.record(Call(
+                at=at, purpose=purpose, model=self.model, provider="laya",
                 prompt_tokens=None, completion_tokens=None,
                 duration_ms=int((time.perf_counter() - clock) * 1000),
-                ok=error is None, error=error, ref=tags.get("ref"),
-            )
-            self.usage.record(ledger_call)
-            self.tracer.span(
-                name=ledger_call.purpose, start_ns=start_ns, end_ns=time.time_ns(),
-                ok=ledger_call.ok, error=error,
-                metadata={"model": self.model, "provider": "laya", "ref": ledger_call.ref},
-            )
+                ok=error is None, error=error, ref=ref,
+                trace_id=ids[0] if ids else None, span_id=ids[1] if ids else None,
+            ))
 
     def true_positive_score(self, state: str, question: str) -> float:
         questions = {

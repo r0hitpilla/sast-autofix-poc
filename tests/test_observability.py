@@ -201,3 +201,55 @@ def test_the_run_report_carries_the_usage_and_a_readable_summary():
     md = to_markdown(rr)
     assert "## AI usage" in md and "1,500 tokens" in md and "| triage | 1 | 1,200 | 300 |" in md
     assert json.loads(to_json(RunReport(target="x")))["llm_usage"] is None
+
+
+# ---- where Langfuse shows each call ---------------------------------------------------------
+
+def test_a_traced_call_returns_the_ids_langfuse_knows_it_by():
+    t, exp = tracer_with_memory()
+    with t.run(name="run"):
+        ids = t.generation(name="fix", model="m", start_ns=1, end_ns=2)
+        laya = t.span(name="laya_triage", start_ns=1, end_ns=2)
+    spans = {s.name: s for s in exp.get_finished_spans()}
+    trace_id, span_id = ids
+    assert (trace_id, span_id) == (format(spans["fix"].context.trace_id, "032x"), format(spans["fix"].context.span_id, "016x"))
+    assert len(trace_id) == 32 and len(span_id) == 16
+    assert laya[0] == trace_id                          # the same trace for the whole run
+
+
+def test_without_tracing_there_are_no_ids_and_a_failure_returns_none():
+    assert NullTracer().generation(name="x", model="m", start_ns=1, end_ns=2) is None
+    t, _ = tracer_with_memory()
+    t._tracer = SimpleNamespace(start_span=lambda *a, **k: (_ for _ in ()).throw(RuntimeError("down")))
+    assert t.generation(name="x", model="m", start_ns=1, end_ns=2) is None
+
+
+def test_the_ledger_keeps_the_ids_for_llm_and_laya_calls():
+    from unittest.mock import MagicMock, patch
+
+    import ollama_client
+    from laya_client import LayaClient
+    from llm_usage import tag
+    from tests.test_ollama_client import FakeChat
+
+    class IdTracer:
+        enabled = True
+
+        def generation(self, **kw):
+            return ("a" * 32, "b" * 16)
+
+        def span(self, **kw):
+            return ("a" * 32, "c" * 16)
+
+    client = ollama_client.OllamaClient("h", "m", tracer=IdTracer())
+    with patch.object(ollama_client, "ChatOllama", return_value=FakeChat(replies=[{}], seen=[])):
+        with tag(purpose="fix"):
+            client.generate("x")
+    call = client.usage.calls()[0]
+    assert (call.trace_id, call.span_id) == ("a" * 32, "b" * 16)
+
+    with patch("laya_client.laya.load", return_value=MagicMock()) as load:
+        load.return_value.predict.return_value = {"answers": {"true_positive": {"noul": 0.5}}}
+        laya = LayaClient("laya", tracer=IdTracer())
+        laya.assess("s", "q", {})
+    assert laya.usage.calls()[0].span_id == "c" * 16

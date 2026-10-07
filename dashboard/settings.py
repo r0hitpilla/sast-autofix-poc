@@ -19,6 +19,10 @@ class Settings:
     # Optional. Read-only GitHub token for live PR state; without it the
     # dashboard shows PR data as recorded by the pipeline.
     github_token: str | None = field(default_factory=lambda: os.environ.get("GITHUB_TOKEN") or None)
+    # Where people's browsers reach Langfuse, for links to a run's trace. Unset: the
+    # address in the Langfuse key file. The project id is the one setup.sh creates.
+    langfuse_public_url: str | None = field(default_factory=lambda: os.environ.get("SAST_LANGFUSE_PUBLIC_URL") or None)
+    langfuse_project_id: str = field(default_factory=lambda: os.environ.get("SAST_LANGFUSE_PROJECT", "sast-autofix"))
     ollama_host: str = field(default_factory=lambda: os.environ.get("OLLAMA_HOST", "http://localhost:11434"))
     # systemd unit of the self-hosted Actions runner, for the health page.
     runner_service: str | None = field(default_factory=lambda: os.environ.get("SAST_RUNNER_SERVICE") or None)

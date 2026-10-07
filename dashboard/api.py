@@ -28,12 +28,12 @@ from .auth import (COOKIE, MIN_PASSWORD_LENGTH, ROLE_LABELS, ROLES, SESSION_TTL,
                    burn_password_time, client_ip, hash_password, lockout_active, now,
                    permissions_for, record, revoke_user_sessions, start_session, token_hash,
                    verify_password)
-from .db import (AuditEvent, AuthSession, FindingRow, Integration, OutboxMessage, PolicyVersion, Run,
+from .db import (AuditEvent, AuthSession, FindingRow, Integration, LlmCall, OutboxMessage, PolicyVersion, Run,
                  TrackedFinding, User,
                  make_sessionmaker)
 from .deps import get_session
 from .settings import Settings, get_settings
-from .sources import github, ollama, system
+from .sources import github, langfuse, ollama, system
 
 VERSION = "1.1.0"
 
@@ -169,6 +169,40 @@ def pr(owner: str, name: str, number: int, live: bool = True,
         raise HTTPException(404, "pull request not found")
     detail["live"] = github.pr_state(repository, number) if live else {"available": False}
     return detail
+
+
+@app.get("/api/runs/{run_id}/ai")
+def run_ai(run_id: str, user: User = Depends(authorize), session: Session = Depends(get_session)):
+    """The run's AI calls as a timeline, and where to find its trace in Langfuse."""
+    if session.get(Run, run_id) is None:
+        raise HTTPException(404, "no such run")
+    calls = queries.run_calls(session, run_id)
+    creds = langfuse.credentials()
+    trace_id = next((c["trace_id"] for c in calls if c["trace_id"]), None)
+    can_read = "ai:content" in permissions_for(user.role)
+    for c in calls:
+        c["link"] = langfuse.trace_url(c["trace_id"], c["span_id"], creds) if c["traced"] else None
+        c.pop("trace_id"), c.pop("span_id")
+    return {"calls": calls, "langfuse": {"connected": creds is not None, "trace_url": langfuse.trace_url(trace_id, None, creds),
+                                          "can_read_content": can_read}}
+
+
+@app.get("/api/ai-calls/{call_id}/content")
+def ai_call_content(call_id: int, request: Request, response: Response, actor: User = Depends(authorize),
+                    session: Session = Depends(get_session)):
+    """The prompt and reply of one AI call, read from Langfuse. They contain the
+    client's source code, so this needs the ai:content permission and every
+    view is written to the audit log."""
+    call = session.get(LlmCall, call_id)
+    if call is None:
+        raise HTTPException(404, "no such call")
+    if not (call.trace_id and call.span_id):
+        return {"available": False, "reason": "This call was not traced to Langfuse."}
+    record(session, "ai_content_viewed", actor=actor, target=f"run {call.run_id} · {call.purpose} · {call.ref or 'n/a'}",
+           detail={"call": call_id}, ip=client_ip(request))
+    session.commit()
+    response.headers["Cache-Control"] = "no-store"
+    return langfuse.fetch_content(call.trace_id, call.span_id)
 
 
 @app.get("/api/usage")

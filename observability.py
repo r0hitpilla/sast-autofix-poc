@@ -47,11 +47,11 @@ class NullTracer:
     def run(self, **kwargs):
         yield
 
-    def generation(self, **kwargs) -> None:
-        pass
+    def generation(self, **kwargs):
+        return None
 
-    def span(self, **kwargs) -> None:
-        pass
+    def span(self, **kwargs):
+        return None
 
     def flush(self) -> None:
         pass
@@ -118,13 +118,18 @@ class LangfuseTracer:
     def _context(self):
         return self._trace.set_span_in_context(self._root) if self._root is not None else None
 
-    def _emit(self, name, attrs, start_ns, end_ns, error=None) -> None:
+    def _emit(self, name, attrs, start_ns, end_ns, error=None):
+        """Send one span. Returns (trace_id, span_id) as the hex strings Langfuse
+        shows them under, or None if it could not be sent."""
         try:
             span = self._tracer.start_span(name, context=self._context(),
                                            start_time=start_ns, attributes=attrs)
             span.end(end_time=end_ns)
+            ctx = span.get_span_context()
+            return format(ctx.trace_id, "032x"), format(ctx.span_id, "016x")
         except Exception as exc:  # tracing must never break a scan
             _warn(f"dropped a span ({exc})")
+            return None
 
     def generation(self, name, model, start_ns, end_ns, prompt_tokens=None, completion_tokens=None,
                    input=None, output=None, ok=True, error=None, metadata=None, parameters=None, **_):
@@ -153,7 +158,7 @@ class LangfuseTracer:
         for key, value in (metadata or {}).items():
             if value is not None:
                 attrs[f"langfuse.observation.metadata.{key}"] = str(value)
-        self._emit(name, attrs, start_ns, end_ns)
+        return self._emit(name, attrs, start_ns, end_ns)
 
     def span(self, name, start_ns, end_ns, ok=True, error=None, metadata=None, **_):
         attrs = {"langfuse.observation.type": "span"}
@@ -163,7 +168,7 @@ class LangfuseTracer:
         for key, value in (metadata or {}).items():
             if value is not None:
                 attrs[f"langfuse.observation.metadata.{key}"] = str(value)
-        self._emit(name, attrs, start_ns, end_ns)
+        return self._emit(name, attrs, start_ns, end_ns)
 
     def flush(self) -> None:
         try:

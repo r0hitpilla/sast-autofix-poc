@@ -51,6 +51,10 @@ class Call:
     error: str | None = None
     truncated: bool = False      # the reply hit the output limit
     ref: str | None = None       # what it was about, e.g. "app.py:98"
+    # Where Langfuse shows this call, when tracing was on: the dashboard uses
+    # them to fetch the prompt and reply and to link to the trace.
+    trace_id: str | None = None
+    span_id: str | None = None
 
 
 def now_iso() -> str:

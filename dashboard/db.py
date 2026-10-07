@@ -210,6 +210,9 @@ class LlmCall(Base):
     truncated: Mapped[bool] = mapped_column(Boolean, default=False)
     ref: Mapped[str | None] = mapped_column(Text)
     error: Mapped[str | None] = mapped_column(Text)
+    # Where Langfuse shows this call (null when tracing was off for the run).
+    trace_id: Mapped[str | None] = mapped_column(String(32))
+    span_id: Mapped[str | None] = mapped_column(String(16))
 
 
 class FindingRow(Base):

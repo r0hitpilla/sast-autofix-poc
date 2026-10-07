@@ -218,3 +218,47 @@ describe("proof of fix", () => {
     expect(screen.queryByText("Proof of fix")).not.toBeInTheDocument();
   });
 });
+
+describe("AI calls on a run", () => {
+  const call = (extra = {}) => ({ id: 7, at: "2026-10-07T10:00:00+00:00", offset_s: 0, purpose: "fix", model: "qwen3", provider: "ollama",
+    ref: "app.py:98", prompt_tokens: 1200, completion_tokens: 300, duration_ms: 4000, ok: true, truncated: false, error: null,
+    traced: true, link: "http://lf/project/p/traces/t?observation=s", ...extra });
+  const ai = (can: boolean, calls = [call()]) => ({ calls, langfuse: { connected: true, trace_url: "http://lf/project/p/traces/t", can_read_content: can } });
+  const show = async (routes: Routes) => {
+    mockApi(routes);
+    const { RunAiCalls } = await import("../components/AiCalls");
+    render(<MemoryRouter><RunAiCalls runId="101" /></MemoryRouter>);
+  };
+
+  it("lists the calls with a link to the trace, and loads text only on request", async () => {
+    await show({ "/runs/101/ai": ai(true),
+                 "/ai-calls/7/content": { available: true, input: "the prompt", output: "the reply" } });
+    expect(await screen.findByRole("link", { name: /Open trace in Langfuse/ })).toHaveAttribute("href", "http://lf/project/p/traces/t");
+    expect(screen.queryByText("the prompt")).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Fix writing" }));
+    expect(screen.getByRole("link", { name: /Open in Langfuse/ })).toHaveAttribute("href", expect.stringContaining("observation=s"));
+    await userEvent.click(screen.getByRole("button", { name: "Show prompt and reply" }));
+    expect(await screen.findByText("the prompt")).toBeInTheDocument();
+    expect(screen.getByText("the reply")).toBeInTheDocument();
+  });
+
+  it("offers no prompt button to roles that may not read prompts", async () => {
+    await show({ "/runs/101/ai": ai(false) });
+    await userEvent.click(await screen.findByRole("button", { name: "Fix writing" }));
+    expect(screen.queryByRole("button", { name: "Show prompt and reply" })).toBeNull();
+    expect(screen.getByText(/your role cannot read them/)).toBeInTheDocument();
+  });
+
+  it("says when a call was not traced", async () => {
+    await show({ "/runs/101/ai": ai(true, [call({ traced: false, link: null })]) });
+    await userEvent.click(await screen.findByRole("button", { name: "Fix writing" }));
+    expect(screen.getByText(/Not traced/)).toBeInTheDocument();
+  });
+
+  it("shows why content is unavailable instead of an error", async () => {
+    await show({ "/runs/101/ai": ai(true), "/ai-calls/7/content": { available: false, reason: "Langfuse could not be reached." } });
+    await userEvent.click(await screen.findByRole("button", { name: "Fix writing" }));
+    await userEvent.click(screen.getByRole("button", { name: "Show prompt and reply" }));
+    expect(await screen.findByText("Langfuse could not be reached.")).toBeInTheDocument();
+  });
+});

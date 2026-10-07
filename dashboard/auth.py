@@ -24,8 +24,8 @@ from .settings import get_settings
 
 ROLES = {
     "admin": {"dashboard:read", "findings:act", "users:manage", "audit:read",
-              "integrations:read", "integrations:manage", "policy:manage"},
-    "security_engineer": {"dashboard:read", "findings:act", "integrations:read", "policy:manage"},
+              "integrations:read", "integrations:manage", "policy:manage", "ai:content"},
+    "security_engineer": {"dashboard:read", "findings:act", "integrations:read", "policy:manage", "ai:content"},
     "developer": {"dashboard:read"},
     "auditor": {"dashboard:read", "audit:read"},
 }
@@ -146,6 +146,8 @@ def required_permission(path: str, method: str = "GET") -> str | None:
         return "users:manage"
     if path.startswith("/api/audit"):
         return "audit:read"
+    if path.startswith("/api/ai-calls"):
+        return "ai:content"       # prompts and replies contain source code
     if path.startswith("/api/policy") and method not in SAFE_METHODS:
         return "policy:manage"
     if path.startswith("/api/integrations"):

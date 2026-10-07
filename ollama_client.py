@@ -73,20 +73,21 @@ class UsageCallback(BaseCallbackHandler):
         ok = ok and not truncated
         if truncated and not error:
             error = "reply hit the output-token limit"
-        call = Call(
-            at=start["at"], purpose=meta.get("purpose", "other"), model=meta.get("model", "?"),
-            provider=self.provider, prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
-            duration_ms=duration_ms, ok=ok, error=error, truncated=truncated, ref=meta.get("ref"),
-        )
-        self.ledger.record(call)
-        self.tracer.generation(
-            name=call.purpose, model=call.model, start_ns=start["ns"], end_ns=time.time_ns(),
+        purpose, model, ref = meta.get("purpose", "other"), meta.get("model", "?"), meta.get("ref")
+        ids = self.tracer.generation(
+            name=purpose, model=model, start_ns=start["ns"], end_ns=time.time_ns(),
             prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
             input=start["prompt"], output=str(getattr(message, "content", "")) if message else None,
             ok=ok, error=error, parameters=GENERATION_OPTIONS,
-            metadata={"purpose": call.purpose, "ref": call.ref, "provider": self.provider,
+            metadata={"purpose": purpose, "ref": ref, "provider": self.provider,
                       "think": meta.get("think"), "truncated": truncated},
         )
+        self.ledger.record(Call(
+            at=start["at"], purpose=purpose, model=model, provider=self.provider,
+            prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
+            duration_ms=duration_ms, ok=ok, error=error, truncated=truncated, ref=ref,
+            trace_id=ids[0] if ids else None, span_id=ids[1] if ids else None,
+        ))
 
     def on_llm_end(self, response, *, run_id, **kwargs):
         message = None

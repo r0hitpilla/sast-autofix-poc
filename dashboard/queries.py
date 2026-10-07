@@ -251,6 +251,23 @@ def usage_overview(session: Session, repository=None, since=None, top_runs=5) ->
     }
 
 
+def run_calls(session: Session, run_id: str) -> list[dict]:
+    """Every AI call of a run in the order it happened, with its offset from the
+    first call: the timeline on the run page."""
+    rows = session.scalars(select(LlmCall).where(LlmCall.run_id == run_id)
+                           .order_by(LlmCall.at, LlmCall.id)).all()
+    if not rows:
+        return []
+    first = aware(rows[0].at)
+    return [{
+        "id": c.id, "at": iso(c.at), "offset_s": round((aware(c.at) - first).total_seconds(), 1),
+        "purpose": c.purpose, "model": c.model, "provider": c.provider, "ref": c.ref,
+        "prompt_tokens": c.prompt_tokens, "completion_tokens": c.completion_tokens,
+        "duration_ms": c.duration_ms, "ok": c.ok, "truncated": c.truncated, "error": c.error,
+        "traced": bool(c.span_id), "trace_id": c.trace_id, "span_id": c.span_id,
+    } for c in rows]
+
+
 def run_usage(session: Session, run_id: str) -> dict:
     """The AI calls of one run (empty for runs recorded before usage tracking)."""
     cols = _usage_cols()

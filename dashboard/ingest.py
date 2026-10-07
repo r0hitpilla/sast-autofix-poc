@@ -110,6 +110,8 @@ def llm_calls_from_report(report: dict, run_id: str) -> list[LlmCall]:
                 duration_ms=int(c.get("duration_ms") or 0), ok=bool(c.get("ok", True)),
                 truncated=bool(c.get("truncated", False)), ref=c.get("ref"),
                 error=(str(c["error"])[:500] if c.get("error") else None),
+                trace_id=(str(c["trace_id"])[:32] if c.get("trace_id") else None),
+                span_id=(str(c["span_id"])[:16] if c.get("span_id") else None),
             ))
         except (TypeError, ValueError):
             continue  # one malformed entry must not lose the run

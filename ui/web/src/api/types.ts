@@ -193,3 +193,15 @@ export interface RuleRow {
   rule_id: string; cwe: string; severity: Severity; pack: string; findings: number; last_seen: string | null;
   gate_action: GateAction;
 }
+
+/** One AI call in a run, in the order it happened. `link` opens it in Langfuse. */
+export interface AiCall {
+  id: number; at: string; offset_s: number; purpose: string; model: string; provider: string; ref: string | null;
+  prompt_tokens: number | null; completion_tokens: number | null; duration_ms: number; ok: boolean;
+  truncated: boolean; error: string | null; traced: boolean; link: string | null;
+}
+export interface RunAi {
+  calls: AiCall[];
+  langfuse: { connected: boolean; trace_url: string | null; can_read_content: boolean };
+}
+export interface AiContent { available: boolean; reason?: string; input?: string; output?: string; truncated?: boolean }
